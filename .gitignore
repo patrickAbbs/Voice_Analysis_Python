@@ -1,0 +1,13 @@
+.vs
+.idea
+*.pyc
+/__pycache__
+compile_test.py
+client_secrets.json
+/file_storage
+/nonsense
+/Audio_Analysis/__pycache__
+/tmp
+/application_default_credentials.json
+/pyclarity-0.6.1
+/open_mha_interface
