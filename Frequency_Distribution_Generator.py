@@ -1,3 +1,4 @@
+import math
 import numpy
 import librosa
 import matplotlib.pyplot as pyplot
@@ -46,7 +47,7 @@ def Generate_Typed_Bucketed_Frequency_Progressions(linear_spectrogram_data, spec
 
     typed_bucketed_frequency_progressions["logarithmic"] = typed_bucketed_frequency_progressions["linear"] ** 0.30102999566
     typed_bucketed_frequency_progressions["decibel"] = librosa.amplitude_to_db(typed_bucketed_frequency_progressions["linear"], ref=numpy.max)
-    typed_bucketed_frequency_progressions["decibel"] += 80
+    typed_bucketed_frequency_progressions["decibel"] += 80.0
 
     return typed_bucketed_frequency_progressions
 
@@ -78,11 +79,23 @@ def Generate_And_Save_Frequency_Distribution_Chart(audios_analysis_data):
     for audio_file_name in Audio_File_Set:
         spectrogram_window_size_in_audio_samples = round(audios_analysis_data[audio_file_name]["sample_rate"] * Spectrogram_Window_Size_In_Seconds)
         spectrogram_jump_length_in_audio_samples = round(audios_analysis_data[audio_file_name]["sample_rate"] * Spectrogram_Window_Jump_In_Seconds)
+        spectrogram_fft_data_points = 2 * spectrogram_window_size_in_audio_samples  # Number of fft points; Kept 2x to increase the frequency resolution
+
+        distribution_to_spectrogram_frequency_bucket_multiplier = audios_analysis_data[audio_file_name]["spectrogram_frequencies"][1] / Frequency_Distribution_Bucket_Increment
+        bucketed_frequency_distribution = audios_analysis_data[audio_file_name]["typed_bucketed_frequency_distributions"][Frequency_Distribution_Display_Type]
+        visualizer_compatibility_mapped_bucketed_frequency_distribution = []
+        for spectrogram_frequency_index in range(len(audios_analysis_data[audio_file_name]["spectrogram_frequencies"])):
+            spectrogram_frequency_progression = [0] * len(bucketed_frequency_distribution[0])
+            if audios_analysis_data[audio_file_name]["spectrogram_frequencies"][spectrogram_frequency_index] < Frequency_Distribution_Displayed_Frequency_Maximum:
+                frequency_distribution_bucket_index = round(spectrogram_frequency_index * distribution_to_spectrogram_frequency_bucket_multiplier)
+                spectrogram_frequency_progression = bucketed_frequency_distribution[frequency_distribution_bucket_index]
+            visualizer_compatibility_mapped_bucketed_frequency_distribution.append(spectrogram_frequency_progression)
+        visualizer_compatibility_mapped_bucketed_frequency_distribution = numpy.array(visualizer_compatibility_mapped_bucketed_frequency_distribution)
 
         pyplot.subplot(subplot_number)
         pyplot.title(audio_file_name)
         pyplot.ylim(0, Frequency_Distribution_Displayed_Frequency_Maximum)
-        librosa.display.specshow(audios_analysis_data[audio_file_name]["typed_bucketed_frequency_distributions"][Frequency_Distribution_Display_Type],
+        librosa.display.specshow(visualizer_compatibility_mapped_bucketed_frequency_distribution,
                                  win_length=spectrogram_window_size_in_audio_samples, hop_length=spectrogram_jump_length_in_audio_samples,
                                  x_axis='time', y_axis='hz', sr=audios_analysis_data[audio_file_name]["sample_rate"])
         subplot_number += 1
@@ -93,7 +106,7 @@ def Generate_And_Save_Frequency_Distribution_Chart(audios_analysis_data):
 
 def Generate_Bucketed_Frequency_Distribution_Set(audios_analysis_data):
     for audio_file_name in Audio_File_Set:
-        frequency_centers = audios_analysis_data[audio_file_name]["spectrogram_frequencies"]
+        frequency_centers = Generate_Frequency_Centers(audios_analysis_data[audio_file_name]["spectrogram_frequencies"])
         audios_analysis_data[audio_file_name]["typed_bucketed_frequency_progressions"] = Generate_Typed_Bucketed_Frequency_Progressions(audios_analysis_data[audio_file_name]["typed_spectrogram_data"]["linear"], audios_analysis_data[audio_file_name]["spectrogram_frequencies"], frequency_centers)
 
         audios_analysis_data[audio_file_name]["typed_bucketed_frequency_distributions"] = Generate_Typed_Bucketed_Frequency_Distributions(audios_analysis_data[audio_file_name]["typed_bucketed_frequency_progressions"])

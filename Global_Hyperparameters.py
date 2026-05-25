@@ -5,13 +5,13 @@ Chart_Image_Resolution = 250
 Spectrogram_Window_Size_In_Seconds = 0.05  # 50ms
 Spectrogram_Window_Jump_In_Seconds = 0.01  # 8ms
 Spectrogram_Displayed_Frequency_Maximum = 4000
-Spectrogram_Display_Type = "decibel"
+Spectrogram_Display_Type = "logarithmic"
 
 Frequency_Distribution_Bucket_Range = 250.0
 Frequency_Distribution_Bucket_Increment = 25.0
 Frequency_Distribution_Displayed_Frequency_Maximum = 4000
 Frequency_Distribution_Frequency_Maximum = 10000
-Frequency_Distribution_Display_Type = "decibel"
+Frequency_Distribution_Display_Type = "logarithmic"
 
 
 
@@ -22,7 +22,7 @@ Audio_File_Set = ["normal_1", "no_nose_1", "round_1", "scratchy_1", "throat_clos
 #Audio_File_Set = ["round_1", "round_2", "round_3"]
 
 Analysis_Directory = "tmp/media/voice_modulation/"
-Analysis_Run_Name = "all_1s_decibel_distribution_test"
+Analysis_Run_Name = "all_1s_logarithmic_distribution_test_2"
 
 
 
