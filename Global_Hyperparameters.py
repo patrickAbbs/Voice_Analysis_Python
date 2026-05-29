@@ -13,16 +13,26 @@ Frequency_Distribution_Displayed_Frequency_Maximum = 4000
 Frequency_Distribution_Frequency_Maximum = 10000
 Frequency_Distribution_Display_Type = "logarithmic"
 
+Subdistribution_Voiced_Frequency_Limit = 4000
+Subdistribution_Timepoint_Voiced_Ratio_Minimum = 0.5
+Subdistribution_Thresholds = [0.9, 0.8, 0.7, 0.6, 0.5]
+Subdistribution_Display_Type = "logarithmic"
+Subdistribution_Display_Colors = ["blue", "red", "green", "purple", "orange", "teal", "yellow"]
 
 
+
+
+#Distribution_Types = ["linear", "logarithmic", "decibel"]
+Distribution_Types = ["logarithmic"]
 
 Audio_Directory = "../voice_modulation_audio/"
-Audio_File_Set = ["normal_1", "no_nose_1", "round_1", "scratchy_1", "throat_close_1"]
+Audio_File_Set = ["normal_1", "no_nose_1", "round_1"]
+#Audio_File_Set = ["normal_1", "no_nose_1", "round_1", "scratchy_1", "throat_close_1"]
 #Audio_File_Set = ["normal_1"]
 #Audio_File_Set = ["round_1", "round_2", "round_3"]
 
 Analysis_Directory = "tmp/media/voice_modulation/"
-Analysis_Run_Name = "all_1s_logarithmic_distribution_test_2"
+Analysis_Run_Name = "subdistributions_test"
 
 
 
