@@ -7,6 +7,7 @@ from Global_Hyperparameters import Audio_File_Set
 from Spectrogram_Generator import Generate_Audio_Spectrogram_Set
 from Frequency_Distribution_Generator import Generate_Bucketed_Frequency_Distribution_Set
 from Subdistribution_Extractor import Extract_Frequency_Subdistribution_Sets
+from Subdistribution_Difference_Analyzer import Analyze_Subdistribution_Differences
 
 
 class Audio_Analysis_Data:
@@ -26,6 +27,7 @@ def Run_Analysis():
     all_audios_analysis_data = Generate_Audio_Spectrogram_Set(all_audios_analysis_data)
     all_audios_analysis_data = Generate_Bucketed_Frequency_Distribution_Set(all_audios_analysis_data)
     all_audios_analysis_data = Extract_Frequency_Subdistribution_Sets(all_audios_analysis_data)
+    all_audios_analysis_data = Analyze_Subdistribution_Differences(all_audios_analysis_data)
 
 
 Run_Analysis()

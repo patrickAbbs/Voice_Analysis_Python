@@ -1,0 +1,44 @@
+I want you to code a new analysis module. It has a fair amount of overlap with some of the existing code, so where it can reuse existing code or minorly refactor existing code to make it usable, that is fine. It is also fine to implement new code even if it has a fair amount of overlap with existing code if using or refactoring existing code is not straightforward.
+
+The name of the module is Layered_Subdistribution_Analyzer. It's purpose is to explore whether frequency energy subdistributions like those populated in Subdistribution_Extractor might be usable to separately characterize both a speaker's voice and the phonemes they are speaking, by surfacing and separating distinct portions of the overall frequency energy distribution that correspond to voice versus phoneme.
+
+To do this analysis, we will use sets of audio files located in a folder called Phoneme_Corpus that is in the Documents directory that this Voice_Analysis_Python project folder is in. Within the Phoneme_Corpus/data/TRAIN/DR1 directory, there are several folders each with a 5 character name. Each folder contains audio for a single speaker, and the folder name is that speaker's id. Within each speaker's folder, there are sets of files where each set has the same name but different extensions. The only relevant file extensions in each for our purposes are the .WAV.wav ones and the .PHN ones. The .WAV.wav files are the actual audio we will analyze, and the .PHN files contain corresponding phonetic annotations for the audio. Each row in a .PHN file describes the time period when a particular phoneme is spoken in the audio, where the first column is the audio sample index when the phoneme starts, the second column is the audio sample index when the phoneme ends, and the third column is the phoneme itself.
+
+The input for the Layered_Subdistribution_Analyzer will be a dictionary<string, List<string>>, with keys that correspond to particular speaker ids and values that specify a set of audios to analyze for that speaker. So, for example, say that the input dictionary is:
+
+{
+"FCJF0": ["SA1", "SI648"],
+"MEDR0": ["SA1", "SI1374"]
+}
+
+In this case, the first analysis should be performed over the SA1.WAV.wav and SA1.PHN files in Phoneme_Corpus/data/TRAIN/DR1/FCJF0. Then the SI648 files in the same folder, then the SA1 files in Phoneme_Corpus/data/TRAIN/DR1/MEDR0, and finally the SI1374 files in that folder.
+
+Whenever Layered_Subdistribution_Analyzer is run, it should have a parameter called subdistribution_layer that is set to either "universal", "voice", or "phoneme", and controls what type of subdistribution analysis the run the should perform. I will first describe the logic that should be performed when subdistribution_layer is set to "universal", then will describe the partially overlapping / partially distinct logic that should be performed for the other two settings.
+
+The goal of a "universal"-setting Layered_Subdistribution_Analyzer run is to iteratively populate, update, and persist data that is a slight alteration of the frequency_amount_occurrence_counts variable that is currently being populated within the Extract_Frequency_Amount_Occurrence_Ratios() function of the Subdistribution_Extractor file. The only difference is that for Layered_Subdistribution_Analyzer when in the "universal" setting, only a single frequency_amount_occurrence_counts instance should be populated that is totaled across all audios, instead of generating a distinct frequency_amount_occurrence_counts instance for each audio. In other words, the "universal" frequency_amount_occurrence_counts instance should track frequency occurrence counts across all voiced phoneme timepoints for all speakers, rather than separating out by speaker.
+
+Additionally, Layered_Subdistribution_Analyzer should persist the universal frequency_amount_occurrence_counts instance so that it can be loaded and extended with information from new audios without losing its accumulated information from past audios. To do this, create a JSON file called Universal_Frequency_Amount_Occurrence_Counts.json and save it to the tmp/media/output folder in the Voice_Analysis_Python main directory. The Universal_Frequency_Amount_Occurrence_Counts.json structure should look as follows:
+
+{
+"processed_audios": {string: [string]},
+"total_voiced_frequency_timepoints_count": int,
+"frequency_amount_occurrence_counts": [{float: int}]
+}
+
+In this JSON structure, "processed_audios" contains a dictionary of all speaker id and audio combinations that have already been processed. So, for example, after processing the input dictionary provided earlier, processed_audios would be populated with {"FCJF0": ["SA1", "SI648"],"MEDR0": ["SA1", "SI1374"]}. The purpose of processed_audios is to track the cumulative set of audios that have already been incorporated into Universal_Frequency_Amount_Occurrence_Counts.json so that those audios will not be processed again. So, if the Layered_Subdistribution_Analyzer encounters a user-provided audio that is already within Universal_Frequency_Amount_Occurrence_Counts.json while subdistribution_layer is set to "universal", that audio should be skipped with a printed alert that the it is being skipped.
+
+The "total_voiced_frequency_timepoints_count" JSON entry just stores a cumulatively incremented count of audio timepoints that have been processed so far, just like the voiced_frequency_timepoints_count variable in Extract_Frequency_Amount_Occurrence_Ratios.
+
+And finally, the "frequency_amount_occurrence_counts" JSON entry points to the cumulatively tracked frequency_amount_occurrence_counts instance discussed earlier.
+
+Can you start by coding this, then once that is done adequately we can extend it to incorporate logic for the "voice" and "phoneme" subdistribution_layer settings?
+
+
+
+
+
+
+
+
+
+
