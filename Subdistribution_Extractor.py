@@ -15,14 +15,15 @@ class Subdistribution_Tier:
         self.Subdistribution_Sum = sum(subdistribution)
 
 
-#TODO NOTE: I think I messed up the posited logic for incrementing subdistribution occurrence counts, since if, say, a 0.1 entry is added after a 0.2 entry then under current logic the 0.1 entry would only get + 1 even though it should be counted for both the 0.2 and 0.1.
-def Extract_Frequency_Amount_Occurrence_Ratios(bucketed_frequency_distribution_progression, frequency_bucket_centers):
+def Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progression, frequency_bucket_centers, existing_counts=None, existing_voiced_timepoints_count=0.0, timepoint_mask=None):
     voiced_frequency_limit_index = next((center_index for center_index, center_frequency in enumerate(frequency_bucket_centers) if center_frequency > Subdistribution_Voiced_Frequency_Limit), None)
-    frequency_amount_occurrence_counts = [{} for index in range(voiced_frequency_limit_index)]
-    voiced_frequency_timepoints_count = 0.0
+    frequency_amount_occurrence_counts = existing_counts if existing_counts is not None else [{} for _ in range(voiced_frequency_limit_index)]
+    voiced_frequency_timepoints_count = existing_voiced_timepoints_count
     for timepoint_index in range(len(bucketed_frequency_distribution_progression[0])):
         voiced_frequency_range_distribution_ratio = numpy.sum(bucketed_frequency_distribution_progression[:voiced_frequency_limit_index, timepoint_index])
         if voiced_frequency_range_distribution_ratio < Subdistribution_Timepoint_Voiced_Ratio_Minimum:
+            continue
+        if timepoint_mask is not None and not timepoint_mask[timepoint_index]:
             continue
         voiced_frequency_timepoints_count += 1.0
         for voiced_frequency_index in range(voiced_frequency_limit_index):
@@ -37,12 +38,20 @@ def Extract_Frequency_Amount_Occurrence_Ratios(bucketed_frequency_distribution_p
                 for frequency_amount_occurrence_key in frequency_amount_occurrence_counts[voiced_frequency_index]:
                     if frequency_amount_occurrence_key <= timepoint_frequency_ratio:
                         frequency_amount_occurrence_counts[voiced_frequency_index][frequency_amount_occurrence_key] += 1
-    frequency_amount_occurrence_ratios = [{} for index in range(voiced_frequency_limit_index)]
+    return frequency_amount_occurrence_counts, voiced_frequency_timepoints_count
+
+
+def Convert_Occurrence_Counts_To_Ratios(frequency_amount_occurrence_counts, voiced_frequency_timepoints_count):
+    frequency_amount_occurrence_ratios = [{} for _ in range(len(frequency_amount_occurrence_counts))]
     for frequency_bucket_index in range(len(frequency_amount_occurrence_counts)):
         for distribution_ratio, occurrence_count in frequency_amount_occurrence_counts[frequency_bucket_index].items():
-            frequency_entry_occurrence_ratio = occurrence_count / voiced_frequency_timepoints_count
-            frequency_amount_occurrence_ratios[frequency_bucket_index][distribution_ratio] = frequency_entry_occurrence_ratio
+            frequency_amount_occurrence_ratios[frequency_bucket_index][distribution_ratio] = occurrence_count / voiced_frequency_timepoints_count
     return frequency_amount_occurrence_ratios
+
+
+def Extract_Frequency_Amount_Occurrence_Ratios(bucketed_frequency_distribution_progression, frequency_bucket_centers):
+    frequency_amount_occurrence_counts, voiced_frequency_timepoints_count = Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progression, frequency_bucket_centers)
+    return Convert_Occurrence_Counts_To_Ratios(frequency_amount_occurrence_counts, voiced_frequency_timepoints_count)
 
 
 def Extract_Frequency_Subdistributions(frequency_amount_occurrence_ratios):

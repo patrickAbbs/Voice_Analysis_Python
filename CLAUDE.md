@@ -28,7 +28,51 @@ For each frequency bucket, determines the highest amplitude ratio that occurs at
 - Thresholds are defined in `Subdistribution_Thresholds` (e.g. `[0.9, 0.8, 0.7, 0.6, 0.5]`).
 - Output charts: one "self" chart per audio file (all threshold tiers stacked) and one "cross" chart per threshold tier (all audio files side by side).
 
-**Known bug (line 18):** The occurrence count increment logic is incorrect for entries where a new frequency ratio is lower than an existing one. A new entry at ratio 0.1 inherits the count of the nearest-above entry (0.2) rather than starting from 0, which means it may be undercounted for all thresholds below 0.2.
+**Refactored internals:** The original `Extract_Frequency_Amount_Occurrence_Ratios` was split into two exported functions:
+- `Accumulate_Frequency_Occurrence_Counts(distribution, bucket_centers, existing_counts, existing_timepoints_count, timepoint_mask)` — accumulates counts into an existing state; accepts an optional boolean `timepoint_mask` to skip timepoints.
+- `Convert_Occurrence_Counts_To_Ratios(counts, timepoints_count)` — converts raw counts to occurrence ratios.
+- `Extract_Frequency_Amount_Occurrence_Ratios` is now a thin wrapper over both (backward compatible).
+
+### 4. `Subdistribution_Difference_Analyzer.py`
+Compares the extracted subdistributions between every pair of audio files.
+- For each pair, produces a per-bucket signed difference chart (`A − B`) per threshold tier. Bars are colored by which audio is higher.
+- Also produces a summary chart showing the L1 distance (total absolute difference) between each pair at each threshold tier.
+- Output: one PNG per audio pair + one summary PNG, all in `Analysis_Directory`.
+
+### 5. `Layered_Occurrence_Count_Populator.py`
+Processes audio from the TIMIT phoneme corpus (`../Phoneme_Corpus/data/TRAIN/DR1/{speaker_id}/{audio_name}.WAV.wav`) and accumulates `frequency_amount_occurrence_counts` state into JSON files for later use by `Layered_Subdistribution_Generator`.
+
+Entry point: `Run_Layered_Occurence_Count_Population(speaker_audio_dict, subdistribution_layer)`
+
+- `speaker_audio_dict`: `dict[str, list[str]]` — maps speaker IDs to audio filenames (without extension).
+- `subdistribution_layer`: `"universal"` | `"voice"` | `"phoneme"`
+  - `"universal"` — accumulates all voiced timepoints into one global JSON.
+  - `"voice"` — one JSON per speaker.
+  - `"phoneme"` — one JSON per voiced phoneme (32 phonemes tracked).
+- Only timepoints annotated as voiced phonemes in the corresponding `.PHN` file are included. Unvoiced/silence timepoints are skipped via a `timepoint_mask` passed to `Accumulate_Frequency_Occurrence_Counts`.
+- Persists after each audio so progress survives mid-run failures. Skips already-processed audios on re-run (tracked in each JSON's `processed_audios` field).
+- Output JSON files written to `tmp/media/output/`:
+  - `Universal_Frequency_Amount_Occurrence_Counts.json`
+  - `Speaker_{id}_Frequency_Amount_Occurrence_Counts.json`
+  - `Phoneme_{label}_Frequency_Amount_Occurrence_Counts.json`
+- JSON structure: `{ "processed_audios": {speaker_id: [audio_name]}, "total_voiced_frequency_timepoints_count": float, "frequency_amount_occurrence_counts": [{float_key: int}], "frequency_bucket_centers": [float] }`
+
+### 6. `Layered_Subdistribution_Generator.py`
+Loads the JSON files produced by `Layered_Occurrence_Count_Populator` and generates tiered subdistribution charts, with optional universal subtraction to isolate voice- or phoneme-specific frequency patterns.
+
+Entry point: `Run_Layered_Subdistribution_Generation(subdistribution_layer, voice_set, phoneme_set, allow_negative_subtractive_subdistributions, generate_original_subdistribution_charts, generate_subtractive_subdistribution_charts)`
+
+- `"universal"` — generates one chart from the universal JSON.
+- `"voice"` — for each speaker in `voice_set`, generates original and/or subtractive charts. Subtractive = voice tier minus universal tier per bucket.
+- `"phoneme"` — same as voice but for each phoneme in `phoneme_set`.
+- `allow_negative_subtractive_subdistributions`: if `False`, subtractive values are clamped to 0.
+- `generate_original_subdistribution_charts` / `generate_subtractive_subdistribution_charts`: boolean flags controlling which chart types are produced.
+- Output PNGs written to `Analysis_Directory` with `Analysis_Run_Name` prefix:
+  - `{run_name}universal_subdistributions.png`
+  - `{run_name}voice_original_subdistributions_{speaker_id}.png`
+  - `{run_name}voice_subtractive_subdistributions_{speaker_id}.png`
+  - `{run_name}phoneme_original_subdistributions_{phoneme}.png`
+  - `{run_name}phoneme_subtractive_subdistributions_{phoneme}.png`
 
 ## Data Model
 
@@ -68,8 +112,22 @@ All pipeline state lives in `Audio_Analysis_Data` (defined in `analysis_runner.p
 
 ## Output Files
 
-All written to `Analysis_Directory` with `Analysis_Run_Name` as prefix:
+Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (pipeline):
 - `{run_name}_spectrograms.png`
 - `{run_name}_frequency_distribution.png`
 - `{run_name}self_subdistributions_{audio_name}.png` (one per audio file)
 - `{run_name}cross_subdistributions_{threshold}.png` (one per threshold tier)
+- `{run_name}subdistribution_diff_{a}_vs_{b}.png` (one per audio pair)
+- `{run_name}subdistribution_diff_summary.png`
+
+Written to `tmp/media/output/` (corpus analysis):
+- `Universal_Frequency_Amount_Occurrence_Counts.json`
+- `Speaker_{id}_Frequency_Amount_Occurrence_Counts.json`
+- `Phoneme_{label}_Frequency_Amount_Occurrence_Counts.json`
+
+Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (layered subdistribution charts):
+- `{run_name}universal_subdistributions.png`
+- `{run_name}voice_original_subdistributions_{speaker_id}.png`
+- `{run_name}voice_subtractive_subdistributions_{speaker_id}.png`
+- `{run_name}phoneme_original_subdistributions_{phoneme}.png`
+- `{run_name}phoneme_subtractive_subdistributions_{phoneme}.png`

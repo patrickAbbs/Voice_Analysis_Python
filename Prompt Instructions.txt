@@ -34,6 +34,61 @@ And finally, the "frequency_amount_occurrence_counts" JSON entry points to the c
 Can you start by coding this, then once that is done adequately we can extend it to incorporate logic for the "voice" and "phoneme" subdistribution_layer settings?
 
 
+-------------------------------------------------------------------------------------------------------
+
+
+Okay great, next please code the logic path for when subdistribution_layer is set to "voice". For this setting, the goal is to iteratively populate, update, and persist data in a similar way to the "universal" setting, but with one key difference.
+
+Instead of populating a single universal frequency_amount_occurrence_counts instance, there should instead be a distinct frequency_amount_occurrence_counts instance and corresponding JSON file for each unique speaker. So, to continue the earlier example, if Layered_Subdistribution_Analyzer is run over input audio dictionary {"FCJF0": ["SA1", "SI648"],"MEDR0": ["SA1", "SI1374"]}, then it should populate and persist two distinct Frequency_Amount_Occurrence_Counts JSON files, one for speaker FCJF0 and the other for speaker MEDR0. The names of the JSON files should be Speaker_{speaker_id}_Frequency_Amount_Occurrence_Counts.json, where {speaker_id} corresponds to, in this example case, FCJF0 for one file and MEDR0 for the other. The same logic for skipping already processed audio as is used for used for the "universal" logic pathway should also be used here.
+
+Next, please code the logic path for when subdistribution_layer is set to "phoneme". For this setting, the goal is also to iteratively populate, update, and persist data in a similar way to the "universal" and "voice" settings, but with some key differences.
+
+The goal for the "phoneme" setting pathway is to populate a distinct frequency_amount_occurrence_counts instance and corresponding JSON file for each distinct voiced phoneme, which can be done by referencing the corresponding .PHN phoneme annotation file for each audio file. As described earlier, there is a corresponding .PHN for every .WAV.wav file, and it will have the same name as the .WAV.wav file. So, for example, there will be an SA1.PHN file inside the Phoneme_Corpus/data/TRAIN/DR1/FCJF0 folder alongside the SA1.WAV.wav file. 
+
+The .PHN file should be treated just like a .txt file for opening and parsing purposes, and it contains corresponding phonetic annotations for the audio. Each row in a .PHN file specifies the time period when a particular phoneme instance is spoken in the audio, via a row for each phoneme instance and single-space-separated values within each row. The first value is the audio sample index when the phoneme starts, the second value is the audio sample index when the phoneme ends, and the third value is the phoneme itself. So, for example, the third row of Phoneme_Corpus/data/TRAIN/DR1/FCJF0/SA1.PHN is "4559 5723 ix". This means that there is an instance of the "ix" phoneme that starts at sample index 4559 of the SA1.WAV.wav audio, and ends at sample index 5723. 
+
+The goal is to populate a corresponding frequency_amount_occurrence_counts instance for each distinct phoneme. So, for example, if Phoneme_Corpus/data/TRAIN/DR1/FCJF0/SA1.PHN contains phoneme instance annotations "4559 5723 ix" and "29660 31719 ao", while Phoneme_Corpus/data/TRAIN/DR1/MEDR0/SI1374.PHN contains phoneme instance annotations "11112 11947 ao" and "29535 30400 ix", then all of the timepoints encompassed by each of the "ix" phoneme instances should be used to populate / update the frequency_amount_occurrence_counts for a Phoneme_ix_Frequency_Amount_Occurrence_Counts.json file, while all of the timepoints encompassed by each of the "ao" phoneme instances should be used to populate / update the frequency_amount_occurrence_counts for a Phoneme_ao_Frequency_Amount_Occurrence_Counts.json file.
+
+However, there are only a subset of phonemes that we want to track frequency_amount_occurrence_counts for. Specifically, each of the following set of voiced phonemes should be tracked: ["l", "r", "w", "y", "el", "m", "n", "ng", "em", "en", "eng", "nx","iy", "ih", "eh", "ey", "ae", "aa", "aw", "ay", "ah", "ao", "oy", "ow", "uh", "uw", "ux", "er", "ax", "ix", "axr", "ax-h"]
+
+Any timepoint that corresponds to a phoneme that is not in this set should be skipped entirely. And this skipping condition applies to all subdistribution_layer settings, so including "universal" and "voice" in addition to "phoneme". This skipping condition should only apply when Layered_Subdistribution_Analyzer is being run, since only during Layered_Subdistribution_Analyzer runs is audio guaranteed to come from the Phoneme_Corpus where phonetic annotation data is available. Also, this annotated-phoneme-based skipping timepoint condition should be applied in addition to the already implemented Subdistribution_Timepoint_Voiced_Ratio_Minimum-based timepoint skipping condition in the Accumulate_Frequency_Occurrence_Counts() function. In other words, if a timepoint either fails the already implemented (if voiced_frequency_range_distribution_ratio < Subdistribution_Timepoint_Voiced_Ratio_Minimum) condition or fails the (belongs to a flagged voice phoneme) condition, that timepoint should be skipped for all three subdistribution_layer setting logic pathways.
+
+Once both of the "voice" and "phoneme" logic pathways are implemented, the first portion of Layered_Subdistribution_Analyzer logic will be complete. The second portion is independent of the first and involves loading and processing persisted Frequency_Amount_Occurrence_Counts.json files, so we can continue on to that with a new set of functions next.
+
+
+-------------------------------------------------------------------------------------------------------
+
+
+Actually, instead of stopping to review test the current code now, let's implement the second half of the Layered_Subdistribution_Analyzer functionality first so that all of the logic will be in a complete state for reviewing and testing. Before jumping into that, as a bit of cleanup please rename the current Layered_Subdistribution_Analyzer file to Layered_Occurrence_Count_Populator, and rename the function Run_Layered_Subdistribution_Analysis() to Run_Layered_Occurence_Count_Population().
+
+Moving on, the second half of functionality can be run independently of what is already implemented, so create a new file for it called Layered_Subdistribution_Generator. The purpose of Layered_Subdistribution_Generator is to separate out and surface portions of frequency energy subdistributions that characterize particular voices and phonemes, similarly to but expanding on the functionality currently implemented in Subdistribution_Extractor.
+
+Similarly to Layered_Occurrence_Count_Populator, Layered_Subdistribution_Generator should have a subdistribution_layer parameter that is settable to either "universal", "voice", or "phoneme", and controls which logic path to use. I will describe each of these logic paths one at a time, starting with the "universal" path.
+
+The goal of a "universal"-setting Layered_Subdistribution_Generator run is to load the persisted universal occurrence count data from the Universal_Frequency_Amount_Occurrence_Counts.json file, translate the JSON-stored frequency_amount_occurrence_counts into tiered frequency subdistributions like those produced by Convert_Occurrence_Counts_To_Ratios() followed by Extract_Frequency_Subdistributions() in the Subdistribution_Extractor file, and then generate and save a single tiered subdistribution chart containing a subplot for each tier like those produced by Generate_Tiered_Subdistribution_Charts() in the Subdistribution_Extractor file.
+
+The voiced_frequency_timepoints_count parameter required to call Convert_Occurrence_Counts_To_Ratios() corresponds to the "total_voiced_frequency_timepoints_count" value stored in the persisted JSON file. The frequency_bucket_centers value required by Generate_Tiered_Subdistribution_Charts() is I believe not yet persisted anywhere. Please extend the JSON structure for Universal_Frequency_Amount_Occurrence_Counts.json to additionally store the frequency_bucket_centers value so that it can be loaded and referenced accordingly.
+
+Next, please code the Layered_Subdistribution_Generator logic path for when subdistribution_layer is set to "voice". When in this setting, Layered_Subdistribution_Generator should have an additional parameter voice_set that is a list of strings of voice ids to generate subdistributions for. For example, if voice_set is ["FCJF0", "MEDR0"], then each of the persisted JSON files for speakers FCJF0 and MEDR0 should be processed.
+
+Similarly to the "universal" setting, each voice id in voice_set should have its corresponding Speaker_{speaker_id}_Frequency_Amount_Occurrence_Counts.json file loaded, and then translate the stored frequency_amount_occurrence_counts value into tiered frequency subdistributions. However, at this point there is an additional step before chart generation. 
+
+The goal of this step is to subtract out each "universal" subdistribution tier from each corresponding subdistribution tier for each voice, so that what remains is the portion of each voice subdistribution tier that is specific to that voice and not encompassed universally. To do this, load and populate tiered frequency subdistributions for Universal_Frequency_Amount_Occurrence_Counts.json alongside the parametered voice subdistributions, then iterate through each entry in each subdistribution and subtract the universal value from the voice value. For now, please also add a Boolean parameter allow_negative_subtractive_subdistributions. If allow_negative_subtractive_subdistributions is set to False, then even if subtracting a universal value from a voice value produces a below-0 result, instead set the result to 0.
+
+After populating these subtractive subdistributions for each voice, next generate corresponding tiered subdistribution charts. For now, please add two Boolean parameters generate_original_subdistribution_charts and generate_subtractive_subdistribution_charts. If generate_original_subdistribution_charts is true, then generate tiered subdistribution charts for the voice subdistribution tiers that do not have the universal subdistribution tiers subtracting out. If generate_subtractive_subdistribution_charts is true, then generate tiered subdistribution charts for the voice subdistribution tiers that do have the universal subdistribution tiers subtracting out. If both are true, then generate both sets of charts.
+
+Finally, code the Layered_Subdistribution_Generator logic path for when subdistribution_layer is set to "phoneme". This path should function similarly to the "voice" pathway, but for phonemes. It should have an additional list of strings parameter phoneme_set that might be set to, for example, ["ix", "ao"], in which case the persisted JSON files for phonemes ix and al should be processed.
+
+Just like the "voice" pathway, the "phoneme" pathway should then populate tiered frequency subdistributions for each phoneme, then subtract out the "universal" subdistribution tier from each corresponding subdistribution tier for each phoneme, then generate corresponding tiered subdistribution charts. The same Boolean parameter logic for allow_negative_subtractive_subdistributions, generate_original_subdistribution_charts, and generate_subtractive_subdistribution_charts also applies for the phonemes.
+
+Once this is implemented, that should complete the initial functionality of this new analysis for review and evaluation.
+
+
+
+
+
+
+
 
 
 

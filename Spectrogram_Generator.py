@@ -13,8 +13,8 @@ class Spectrogram_Data:
         self.Frequencies = frequencies
         self.Spectrogram = spectrogram
 
-def Generate_Audio_Spectrogram(audio_directory, audio_file_name):
-    audio_file_path = audio_directory + audio_file_name + ".wav"
+def Generate_Audio_Spectrogram(audio_directory, audio_file_name, extension=".wav"):
+    audio_file_path = audio_directory + audio_file_name + extension
     audio_soundfile = soundfile.read(audio_file_path)
     audio_waveform_channels = audio_soundfile[0]
     sample_rate = audio_soundfile[1]
