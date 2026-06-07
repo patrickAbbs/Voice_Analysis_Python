@@ -2,7 +2,7 @@ import json
 import os
 import matplotlib.pyplot as pyplot
 
-from Global_Hyperparameters import Analysis_Directory, Analysis_Run_Name, Chart_Image_Resolution, Subdistribution_Display_Colors
+from Global_Hyperparameters import Analysis_Directory, Analysis_Run_Name, Chart_Image_Resolution, Subdistribution_Display_Colors, Subdistribution_Thresholds
 from Subdistribution_Extractor import Convert_Occurrence_Counts_To_Ratios, Extract_Frequency_Subdistributions, Subdistribution_Tier
 
 OUTPUT_DIRECTORY = "tmp/media/output/"
@@ -175,5 +175,87 @@ def Run_Layered_Subdistribution_Generation(
         Run_Voice_Generation(voice_set, allow_negative_subtractive_subdistributions, generate_original_subdistribution_charts, generate_subtractive_subdistribution_charts)
     elif subdistribution_layer == "phoneme":
         Run_Phoneme_Generation(phoneme_set, allow_negative_subtractive_subdistributions, generate_original_subdistribution_charts, generate_subtractive_subdistribution_charts)
+    else:
+        print(f"WARNING: Layered_Subdistribution_Generator: unrecognized subdistribution_layer '{subdistribution_layer}'")
+
+
+# --- subtractive generation helpers ---
+
+def Format_Tier_For_Filename(tier):
+    return str(tier).replace(".", "")
+
+
+def Extract_Single_Subdistribution_Tier(frequency_amount_occurrence_ratios, threshold):
+    thresholded_subdistribution = [
+        max((ratio for ratio, occurrence in bucket.items() if occurrence >= threshold), default=0.0)
+        for bucket in frequency_amount_occurrence_ratios
+    ]
+    return Subdistribution_Tier(threshold, thresholded_subdistribution)
+
+
+def Load_Subtractive_Tiers(path_template):
+    tiers = []
+    frequency_bucket_centers = None
+    for tier_threshold in Subdistribution_Thresholds:
+        path = path_template(tier_threshold)
+        state = Load_Layered_State(path)
+        if state is None:
+            print(f"Layered_Subdistribution_Generator: no data at '{path}', skipping tier {tier_threshold}")
+            continue
+        if frequency_bucket_centers is None:
+            frequency_bucket_centers = Get_Voiced_Frequency_Bucket_Centers(state)
+        ratios = Convert_Occurrence_Counts_To_Ratios(
+            state["frequency_amount_occurrence_counts"],
+            state["total_voiced_frequency_timepoints_count"]
+        )
+        tiers.append(Extract_Single_Subdistribution_Tier(ratios, tier_threshold))
+    return tiers, frequency_bucket_centers
+
+
+# --- subtractive analysis runners ---
+
+def Run_Subtractive_Voice_Generation(voice_set):
+    for voice_index, speaker_id in enumerate(voice_set):
+        tiers, frequency_bucket_centers = Load_Subtractive_Tiers(
+            lambda tier, sid=speaker_id: OUTPUT_DIRECTORY + f"Speaker_{sid}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
+        )
+        if not tiers:
+            print(f"Layered_Subdistribution_Generator: no data found for speaker '{speaker_id}', skipping")
+            continue
+        color = Subdistribution_Display_Colors[voice_index % len(Subdistribution_Display_Colors)]
+        output_path = Analysis_Directory + Analysis_Run_Name + f"_subtractive_voice_subdistributions_{speaker_id}.png"
+        Generate_Layered_Subdistribution_Chart(f"Voice {speaker_id} (subtractive)", tiers, frequency_bucket_centers, output_path, color)
+        print(f"Layered_Subdistribution_Generator: subtractive voice chart saved for '{speaker_id}'")
+    print("Layered_Subdistribution_Generator: subtractive voice generation complete")
+
+
+def Run_Subtractive_Phoneme_Generation(phoneme_set):
+    for phoneme_index, phoneme in enumerate(phoneme_set):
+        tiers, frequency_bucket_centers = Load_Subtractive_Tiers(
+            lambda tier, ph=phoneme: OUTPUT_DIRECTORY + f"Phoneme_{ph}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
+        )
+        if not tiers:
+            print(f"Layered_Subdistribution_Generator: no data found for phoneme '{phoneme}', skipping")
+            continue
+        color = Subdistribution_Display_Colors[phoneme_index % len(Subdistribution_Display_Colors)]
+        output_path = Analysis_Directory + Analysis_Run_Name + f"_subtractive_phoneme_subdistributions_{phoneme}.png"
+        Generate_Layered_Subdistribution_Chart(f"Phoneme {phoneme} (subtractive)", tiers, frequency_bucket_centers, output_path, color)
+        print(f"Layered_Subdistribution_Generator: subtractive phoneme chart saved for '{phoneme}'")
+    print("Layered_Subdistribution_Generator: subtractive phoneme generation complete")
+
+
+# --- subtractive entry point ---
+
+def Run_Subtractive_Layered_Subdistribution_Generation(
+    subdistribution_layer,
+    voice_set=None,
+    phoneme_set=None
+):
+    if subdistribution_layer == "universal":
+        Run_Universal_Generation()
+    elif subdistribution_layer == "voice":
+        Run_Subtractive_Voice_Generation(voice_set)
+    elif subdistribution_layer == "phoneme":
+        Run_Subtractive_Phoneme_Generation(phoneme_set)
     else:
         print(f"WARNING: Layered_Subdistribution_Generator: unrecognized subdistribution_layer '{subdistribution_layer}'")

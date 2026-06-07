@@ -15,7 +15,7 @@ class Subdistribution_Tier:
         self.Subdistribution_Sum = sum(subdistribution)
 
 
-def Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progression, frequency_bucket_centers, existing_counts=None, existing_voiced_timepoints_count=0.0, timepoint_mask=None):
+def Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progression, frequency_bucket_centers, existing_counts=None, existing_voiced_timepoints_count=0.0, timepoint_mask=None, frequency_ratio_offsets=None):
     voiced_frequency_limit_index = next((center_index for center_index, center_frequency in enumerate(frequency_bucket_centers) if center_frequency > Subdistribution_Voiced_Frequency_Limit), None)
     frequency_amount_occurrence_counts = existing_counts if existing_counts is not None else [{} for _ in range(voiced_frequency_limit_index)]
     voiced_frequency_timepoints_count = existing_voiced_timepoints_count
@@ -28,16 +28,17 @@ def Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progr
         voiced_frequency_timepoints_count += 1.0
         for voiced_frequency_index in range(voiced_frequency_limit_index):
             timepoint_frequency_ratio = bucketed_frequency_distribution_progression[voiced_frequency_index][timepoint_index]
-            if timepoint_frequency_ratio > 0.000001:
-                if timepoint_frequency_ratio not in frequency_amount_occurrence_counts[voiced_frequency_index]:
-                    nearest_encompassing_frequency_ratio = min((other_frequency_ratio for other_frequency_ratio in frequency_amount_occurrence_counts[voiced_frequency_index] if other_frequency_ratio > timepoint_frequency_ratio), default=None)
-                    if nearest_encompassing_frequency_ratio is not None:
-                        frequency_amount_occurrence_counts[voiced_frequency_index][timepoint_frequency_ratio] = frequency_amount_occurrence_counts[voiced_frequency_index][nearest_encompassing_frequency_ratio]
-                    else:
-                        frequency_amount_occurrence_counts[voiced_frequency_index][timepoint_frequency_ratio] = 0
-                for frequency_amount_occurrence_key in frequency_amount_occurrence_counts[voiced_frequency_index]:
-                    if frequency_amount_occurrence_key <= timepoint_frequency_ratio:
-                        frequency_amount_occurrence_counts[voiced_frequency_index][frequency_amount_occurrence_key] += 1
+            if frequency_ratio_offsets is not None:
+                timepoint_frequency_ratio -= frequency_ratio_offsets[voiced_frequency_index]
+            if timepoint_frequency_ratio not in frequency_amount_occurrence_counts[voiced_frequency_index]:
+                nearest_encompassing_frequency_ratio = min((other_frequency_ratio for other_frequency_ratio in frequency_amount_occurrence_counts[voiced_frequency_index] if other_frequency_ratio > timepoint_frequency_ratio), default=None)
+                if nearest_encompassing_frequency_ratio is not None:
+                    frequency_amount_occurrence_counts[voiced_frequency_index][timepoint_frequency_ratio] = frequency_amount_occurrence_counts[voiced_frequency_index][nearest_encompassing_frequency_ratio]
+                else:
+                    frequency_amount_occurrence_counts[voiced_frequency_index][timepoint_frequency_ratio] = 0
+            for frequency_amount_occurrence_key in frequency_amount_occurrence_counts[voiced_frequency_index]:
+                if frequency_amount_occurrence_key <= timepoint_frequency_ratio:
+                    frequency_amount_occurrence_counts[voiced_frequency_index][frequency_amount_occurrence_key] += 1
     return frequency_amount_occurrence_counts, voiced_frequency_timepoints_count
 
 

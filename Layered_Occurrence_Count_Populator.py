@@ -4,7 +4,7 @@ import os
 from Global_Hyperparameters import Distribution_Types, Spectrogram_Window_Jump_In_Seconds
 from Spectrogram_Generator import Generate_Audio_Spectrogram
 from Frequency_Distribution_Generator import Generate_Frequency_Bucket_Centers, Generate_Typed_Bucketed_Frequency_Progressions, Generate_Typed_Bucketed_Frequency_Distributions
-from Subdistribution_Extractor import Accumulate_Frequency_Occurrence_Counts
+from Subdistribution_Extractor import Accumulate_Frequency_Occurrence_Counts, Convert_Occurrence_Counts_To_Ratios, Extract_Frequency_Subdistributions
 
 PHONEME_CORPUS_DIRECTORY = "../Phoneme_Corpus/data/TRAIN/DR1/"
 CORPUS_AUDIO_EXTENSION = ".WAV.wav"
@@ -29,6 +29,15 @@ def Get_Speaker_State_Path(speaker_id):
 
 def Get_Phoneme_State_Path(phoneme):
     return OUTPUT_DIRECTORY + f"Phoneme_{phoneme}_Frequency_Amount_Occurrence_Counts.json"
+
+def Format_Tier_For_Filename(tier):
+    return str(tier).replace(".", "")
+
+def Get_Subtractive_Speaker_State_Path(speaker_id, tier):
+    return OUTPUT_DIRECTORY + f"Speaker_{speaker_id}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
+
+def Get_Subtractive_Phoneme_State_Path(phoneme, tier):
+    return OUTPUT_DIRECTORY + f"Phoneme_{phoneme}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
 
 
 # --- state persistence ---
@@ -227,5 +236,125 @@ def Run_Layered_Occurence_Count_Population(speaker_audio_dict, subdistribution_l
         Run_Voice_Analysis(speaker_audio_dict)
     elif subdistribution_layer == "phoneme":
         Run_Phoneme_Analysis(speaker_audio_dict)
+    else:
+        print(f"WARNING: Layered_Occurrence_Count_Populator: unrecognized subdistribution_layer '{subdistribution_layer}'")
+
+
+# --- subtractive offset helpers ---
+
+def Get_Subdistribution_Offsets_From_State(state, tier):
+    ratios = Convert_Occurrence_Counts_To_Ratios(state["frequency_amount_occurrence_counts"], state["total_voiced_frequency_timepoints_count"])
+    tiers = Extract_Frequency_Subdistributions(ratios)
+    matching = next((t for t in tiers if t.Occurrence_Ratio_Threshold == tier), None)
+    if matching is None:
+        raise ValueError(f"Layered_Occurrence_Count_Populator: threshold {tier} not found in populated tiers. Available: {[t.Occurrence_Ratio_Threshold for t in tiers]}")
+    return matching.Subdistribution
+
+
+def Get_Universal_Subdistribution_Offsets(tier):
+    state = Load_State(Get_Universal_State_Path())
+    if state["frequency_amount_occurrence_counts"] is None:
+        raise ValueError("Layered_Occurrence_Count_Populator: universal state is empty — run universal population first")
+    return Get_Subdistribution_Offsets_From_State(state, tier)
+
+
+def Get_Speaker_Subdistribution_Offsets(speaker_id, tier):
+    path = Get_Subtractive_Speaker_State_Path(speaker_id, tier)
+    state = Load_State(path)
+    if state["frequency_amount_occurrence_counts"] is None:
+        raise ValueError(f"Layered_Occurrence_Count_Populator: subtractive voice state for speaker '{speaker_id}' is empty — run subtractive voice population first")
+    return Get_Subdistribution_Offsets_From_State(state, tier)
+
+
+# --- subtractive analysis runners ---
+
+def Run_Subtractive_Voice_Analysis(speaker_audio_dict, subtractive_subdistribution_tier):
+    universal_offsets = Get_Universal_Subdistribution_Offsets(subtractive_subdistribution_tier)
+    speaker_states = {speaker_id: Load_State(Get_Subtractive_Speaker_State_Path(speaker_id, subtractive_subdistribution_tier)) for speaker_id in speaker_audio_dict}
+
+    for speaker_id, audio_names in speaker_audio_dict.items():
+        state = speaker_states[speaker_id]
+        for audio_name in audio_names:
+            if Is_Already_Processed(state, speaker_id, audio_name):
+                print(f"Layered_Occurrence_Count_Populator: skipping '{speaker_id}/{audio_name}' — already in subtractive voice state for '{speaker_id}'")
+                continue
+
+            print(f"Layered_Occurrence_Count_Populator: processing '{speaker_id}/{audio_name}'...")
+            distribution, frequency_bucket_centers, timepoint_phonemes = Process_Audio(speaker_id, audio_name)
+            timepoint_mask = [p is not None for p in timepoint_phonemes]
+            if state["frequency_bucket_centers"] is None:
+                state["frequency_bucket_centers"] = frequency_bucket_centers
+
+            updated_counts, updated_timepoints_count = Accumulate_Frequency_Occurrence_Counts(
+                distribution, frequency_bucket_centers,
+                state["frequency_amount_occurrence_counts"],
+                state["total_voiced_frequency_timepoints_count"],
+                timepoint_mask,
+                universal_offsets
+            )
+            state["frequency_amount_occurrence_counts"] = updated_counts
+            state["total_voiced_frequency_timepoints_count"] = updated_timepoints_count
+            Mark_Processed(state, speaker_id, audio_name)
+            Save_State(Get_Subtractive_Speaker_State_Path(speaker_id, subtractive_subdistribution_tier), state)
+            print(f"Layered_Occurrence_Count_Populator: '{speaker_id}/{audio_name}' complete — '{speaker_id}' voiced timepoints: {int(state['total_voiced_frequency_timepoints_count'])}")
+
+    print("Layered_Occurrence_Count_Populator: subtractive voice run complete")
+
+
+def Run_Subtractive_Phoneme_Analysis(speaker_audio_dict, subtractive_subdistribution_tier, subtract_voice_for_phoneme):
+    universal_offsets = Get_Universal_Subdistribution_Offsets(subtractive_subdistribution_tier)
+    phoneme_states = {phoneme: Load_State(Get_Subtractive_Phoneme_State_Path(phoneme, subtractive_subdistribution_tier)) for phoneme in VOICED_PHONEMES}
+
+    for speaker_id, audio_names in speaker_audio_dict.items():
+        if subtract_voice_for_phoneme:
+            voice_offsets = Get_Speaker_Subdistribution_Offsets(speaker_id, subtractive_subdistribution_tier)
+            combined_offsets = [u + v for u, v in zip(universal_offsets, voice_offsets)]
+        else:
+            combined_offsets = universal_offsets
+
+        for audio_name in audio_names:
+            if any(Is_Already_Processed(state, speaker_id, audio_name) for state in phoneme_states.values()):
+                print(f"Layered_Occurrence_Count_Populator: skipping '{speaker_id}/{audio_name}' — already in subtractive phoneme states")
+                continue
+
+            print(f"Layered_Occurrence_Count_Populator: processing '{speaker_id}/{audio_name}'...")
+            distribution, frequency_bucket_centers, timepoint_phonemes = Process_Audio(speaker_id, audio_name)
+            for state in phoneme_states.values():
+                if state["frequency_bucket_centers"] is None:
+                    state["frequency_bucket_centers"] = frequency_bucket_centers
+
+            for phoneme in VOICED_PHONEMES:
+                phoneme_mask = [p == phoneme for p in timepoint_phonemes]
+                if not any(phoneme_mask):
+                    continue
+                state = phoneme_states[phoneme]
+                updated_counts, updated_timepoints_count = Accumulate_Frequency_Occurrence_Counts(
+                    distribution, frequency_bucket_centers,
+                    state["frequency_amount_occurrence_counts"],
+                    state["total_voiced_frequency_timepoints_count"],
+                    phoneme_mask,
+                    combined_offsets
+                )
+                state["frequency_amount_occurrence_counts"] = updated_counts
+                state["total_voiced_frequency_timepoints_count"] = updated_timepoints_count
+
+            for phoneme, state in phoneme_states.items():
+                Mark_Processed(state, speaker_id, audio_name)
+                Save_State(Get_Subtractive_Phoneme_State_Path(phoneme, subtractive_subdistribution_tier), state)
+
+            print(f"Layered_Occurrence_Count_Populator: '{speaker_id}/{audio_name}' complete")
+
+    print("Layered_Occurrence_Count_Populator: subtractive phoneme run complete")
+
+
+# --- subtractive entry point ---
+
+def Run_Subtractive_Layered_Occurrence_Count_Population(speaker_audio_dict, subdistribution_layer, subtractive_subdistribution_tier, subtract_voice_for_phoneme=False):
+    if subdistribution_layer == "universal":
+        Run_Universal_Analysis(speaker_audio_dict)
+    elif subdistribution_layer == "voice":
+        Run_Subtractive_Voice_Analysis(speaker_audio_dict, subtractive_subdistribution_tier)
+    elif subdistribution_layer == "phoneme":
+        Run_Subtractive_Phoneme_Analysis(speaker_audio_dict, subtractive_subdistribution_tier, subtract_voice_for_phoneme)
     else:
         print(f"WARNING: Layered_Occurrence_Count_Populator: unrecognized subdistribution_layer '{subdistribution_layer}'")
