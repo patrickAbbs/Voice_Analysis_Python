@@ -16,7 +16,8 @@ Frequency_Distribution_Display_Type = "logarithmic"
 Subdistribution_Voiced_Frequency_Limit = 4000
 Subdistribution_Timepoint_Voiced_Ratio_Minimum = 0.5
 #Subdistribution_Thresholds = [0.9, 0.8, 0.7, 0.6, 0.5]
-Subdistribution_Thresholds = [0.975, 0.95, 0.9, 0.8, 0.6]
+#Subdistribution_Thresholds = [0.975, 0.95, 0.9, 0.8, 0.6]
+Subdistribution_Thresholds = [0.975, 0.9, 0.6]
 Subdistribution_Display_Type = "logarithmic"
 Subdistribution_Display_Colors = ["blue", "red", "green", "purple", "orange", "teal", "yellow", "cyan", "magenta", "brown"]
 

@@ -97,6 +97,36 @@ Loads the `_Subtractive_` JSON files produced by `Run_Subtractive_Layered_Occurr
   - `{run_name}_subtractive_voice_subdistributions_{speaker_id}.png`
   - `{run_name}_subtractive_phoneme_subdistributions_{phoneme}.png`
 
+### 7. `Voice_Subdistribution_Deviation_Tracker.py`
+Tracks how a comparative speaker's per-bucket frequency ratios deviate from a reference voice's subdistribution baseline over time, producing an exponentially weighted cumulative progression per frequency bucket.
+
+**Entry point:** `Run_Voice_Subdistribution_Deviation_Tracking(voice_id, comparative_voices_audio_set, occurrence_ratio_threshold, cumulation_half_life)`
+
+- `voice_id`: reference speaker ID whose persisted JSON (`Speaker_{id}_Frequency_Amount_Occurrence_Counts.json`) is loaded and used to extract a single `Subdistribution_Tier` at `occurrence_ratio_threshold`. This gives the per-bucket baseline — the highest frequency ratio that occurs at least `occurrence_ratio_threshold` fraction of the time for the reference speaker.
+- `comparative_voices_audio_set`: `dict[str, list[str]]` — maps each comparative speaker ID to their audio filenames. All keys are processed.
+- `occurrence_ratio_threshold`: float (e.g. `0.6`) — used both as the subdistribution extraction threshold and as the neutral midpoint in the deviation normalization.
+- `cumulation_half_life`: float — converted to a per-timepoint `cumulation_weight` via `Convert_Half_Life_To_Cumulation_Weight(Spectrogram_Window_Jump_In_Seconds, cumulation_half_life)` using an exponential decay formula (`0.5 ^ (window_duration / half_life)`).
+
+**Per-speaker processing:**
+
+For each comparative speaker, a `cumulative_above_subdistribution_value_and_deviation_progressions` dict is initialized: keys are voiced `frequency_bucket_centers`, values are `(first_list, second_list)` tuples initialized to `([occurrence_ratio_threshold], [0.0])`.
+
+Audio files are processed in order via `Process_Audio()`. Valid timepoints (passing the voiced-ratio minimum and voiced-phoneme mask checks from `Accumulate_Frequency_Occurrence_Counts`) append new values to both lists for every frequency bucket:
+
+- **First list** — exponentially weighted average of whether the comparative speaker's ratio exceeds the reference baseline at this bucket: `Weighted_Average(last_value, cumulation_weight, (1.0 if ratio > baseline else 0.0), 1 - cumulation_weight)`. Represents the cumulative fraction of time the comparative speaker is above the reference voice's threshold.
+- **Second list** — deviation of the first list value from `occurrence_ratio_threshold`, normalized to `[-1, 1]`: positive when above threshold `((first - threshold) / (1 - threshold))`, negative when below `((threshold - first) / threshold * -1)`.
+
+**Output chart** (one PNG per comparative speaker):
+- Two-subplot line graph. Each line = one frequency bucket, colored on a purple (lowest frequency) → orange (highest frequency) gradient.
+- Subplot 1: first list values, y-axis `[0, 1]`.
+- Subplot 2: second list values, y-axis `[-1, 1]`, with a zero baseline.
+- X-axis for both: time in seconds (`datapoint_index * Spectrogram_Window_Jump_In_Seconds`).
+- Saved to `{Analysis_Directory}{Analysis_Run_Name}_voice_comparative_progression_{voice_id}_{speaker_id}_{occurrence_ratio_threshold}.png`.
+
+**Shared helpers** (defined here for reuse by future modules):
+- `Convert_Half_Life_To_Cumulation_Weight(processing_window_duration, half_life)` — exponential decay weight.
+- `Weighted_Average(value_1, weight_1, value_2, weight_2)` — scalar weighted average.
+
 ## Data Model
 
 All pipeline state lives in `Audio_Analysis_Data` (defined in `analysis_runner.py`):
@@ -154,3 +184,6 @@ Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (layered subd
 - `{run_name}voice_subtractive_subdistributions_{speaker_id}.png`
 - `{run_name}phoneme_original_subdistributions_{phoneme}.png`
 - `{run_name}phoneme_subtractive_subdistributions_{phoneme}.png`
+
+Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (deviation tracking):
+- `{run_name}_voice_comparative_progression_{voice_id}_{speaker_id}_{occurrence_ratio_threshold}.png` (one per comparative speaker)

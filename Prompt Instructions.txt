@@ -136,6 +136,72 @@ And just like the voice pathway, for each phoneme only one layered_subdistributi
 Once Run_Subtractive_Layered_Subdistribution_Generation() is implemented, I can review and test the code for both Run_Subtractive_Layered_Occurrence_Count_Population() and Run_Subtractive_Layered_Subdistribution_Generation().
 
 
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to implement another analysis module called Voice_Subdistribution_Deviation_Tracker that will reuse some functionality and data from prior modules. Unlike prior modules, Voice_Subdistribution_Deviation_Tracker will only have one logic pathway rather than three. To start, create a new file called Voice_Subdistribution_Deviation_Tracker, and create a function within it called Run_Voice_Subdistribution_Deviation_Tracking(). The Run_Voice_Subdistribution_Deviation_Tracking() function should take the following user-provided input parameters:
+  1) voice_id, which is a string that will be set to a particular speaker id from the phoneme corpus. For example, "FCJF0"
+  2) comparative_voices_audio_set, which is a dictionary<string, list<string>> in the same format as the speaker_audio_dict parameter for Run_Layered_Occurrence_Count_Population(). So, for example, { "FCJF0": ["SA1", "SI648"], "MEDR0": ["SA1", "SI1374"] }
+  3) occurrence_ratio_threshold, which will be set to a positive float value
+  4) cumulation_half_life, which will be set to a positive float value
+
+The first thing that Run_Voice_Subdistribution_Deviation_Tracking() should do is convert the cumulation_half_life value to a cumulation_weight value. This is a piece of logic that will be reused for future analysis modules, so put it within its own helper function called Convert_Half_Life_To_Cumulation_Weight() that takes two parameters processing_window_duration and half_life. A version of this function written in C# is below, so this can be converted directly into python.
+
+public float Convert_Half_Life_To_Cumulation_Weight(float processing_window_duration, float half_life)
+{
+    if (Scenario_Information.Should_Validate && (half_life_duration < 0.00000001f))
+    {
+        Logger?.Error($"Attempting to calculate Convert_Half_Life_To_Cumulation_Weight() when half_life {half_life} is meaningfully close to or below 0.0");
+    }
+
+    float processing_window_to_halflife_duration = (processing_window_duration / half_life);
+
+    float cumulation_weight = (float)Math.Pow(0.5f, processing_window_to_halflife_duration);
+
+    if ((cumulation_weight < 0.0f) || (cumulation_weight > 1.0f))
+    {
+        Logger?.Error($"Convert_Half_Life_To_Cumulation_Weight() calculated a cumulation_weight {cumulation_weight} outside of 0.0->1.0 bounds");
+    }
+    return (cumulation_weight);
+}
+
+For the Run_Voice_Subdistribution_Deviation_Tracking() call to Convert_Half_Life_To_Cumulation_Weight(), half_life should be set to cumulation_half_life and processing_window_duration should be set to the Spectrogram_Window_Jump_In_Seconds parameter in Global_Hyperparameters.
+
+Next, load and populate a subdistribution_tier for the speaker corresponding to the voice_id value, with an occurrence_ratio_threshold corresponding to the user-set occurrence_ratio_threshold parameter. So, for example, if voice_id is "FCJF0" and occurrence_ratio_threshold is 0.095, then a Subdistribution_Tier object should be populated from loaded json file Speaker_FCJF0_Frequency_Amount_Occurrence_Counts.json, using logic like within the Get_Tiered_Subdistributions() function in Layered_Subdistribution_Generator but only to populate a single Subdistribution_Tier with a 0.095 subdistribution_threshold.
+
+Next, for each speaker_id key in comparative_voices_audio_set we want to populate a speaker-specific dictionary<float, tuple<list<float>, list<float>> variable called something like cumulative_above_subdistribution_value_and_deviation_progressions. Each top-level float key within cumulative_above_subdistribution_value_and_deviation_progressions should correspond to each frequency_bucket_center as populated by the Get_Voiced_Frequency_Bucket_Centers() function in Layered_Subdistribution_Generator. For the first list<float> in the corresponding tuple for each frequency_bucket_center, it should be initialized to contain a single value set to the occurrence_ratio_threshold value. For the second list<float> in the tuple, it should be initialized to contain a single value to 0.
+
+To populate the lists for each frequency_bucket_center in a speaker's cumulative_above_subdistribution_value_and_deviation_progressions, we are going to iterate through each audio listed for the speaker within comparative_voices_audio_set. For each audio, the first step is to call the Process_Audio() function in Layered_Occurrence_Count_Populator to extract distribution_frequency_bucket_centers, and timepoint_phonemes for the audio. The next set of steps has some elements that are similar to those in the Accumulate_Frequency_Occurrence_Counts() function of Subdistribution_Extractor, but also diverges in several ways. 
+
+Like Accumulate_Frequency_Occurrence_Counts(), we want to iterate through each timepoint in the distribution extracted for the audio, and skip any timepoints that fail either of the two skip conditions in Accumulate_Frequency_Occurrence_Counts(). Also like Accumulate_Frequency_Occurrence_Counts(), if a timepoint is not skipped then we want to iterate through each frequency_bucket_center-corresponding entry for the timepoint and get its corresponding timepoint_frequency_ratio. At this point, the logic for processing each given timepoint_frequency_ratio value is new and diverges from that of Accumulate_Frequency_Occurrence_Counts().
+
+Specifically, we now want to calculate new values to append to each list corresponding to the current timepoint_frequency_ratio's frequency_bucket_center within cumulative_above_subdistribution_value_and_deviation_progressions for the speaker. 
+
+For the first list, its new appended value is calculated as the weighted average of two values, expressible as (value_1 * weight_1 + value_2 * weight_2) / (weight_1 + weight_2). Similarly to the earlier Convert_Half_Life_To_Cumulation_Weight() function, this weighted averaging function will be reused for future analysis modules, so might be good to define a separate helper function for if there isn't an easily referenceable built-in weighted averaging function in python already. For our current purposes, the values and weights for this weighted averaging are each determined as follows:
+  1) value_1 is the current last value in the list, which the newly appended value being calculated will follow immediately after.
+  2) weight_1 is cumulation_weight as calculated earlier by the Convert_Half_Life_To_Cumulation_Weight() call
+  3) value_2 is set to 1 if timepoint_frequency_ratio is greater than occurrence_ratio_threshold, otherwise 0
+  4) weight_2 is (1 - weight_1)
+
+For the second list, its new appended value is calculated as a function of the value that was just appended to the first list. The logic for this calculation is as follows:
+  1) If the appended first list value is greater than occurrence_ratio_threshold, then the appended second list value is calculated as ([appended first list value] - occurrence_ratio_threshold) * (1.0 / (1.0 - occurrence_ratio_threshold))
+  2) Otherwise, the appended second list value is calculated as ((occurrence_ratio_threshold - [appended first list value]) * (1.0 / occurrence_ratio_threshold) * -1.0)
+
+cumulative_above_subdistribution_value_and_deviation_progressions for a given speaker should be populated across all of the speaker's audio files, such that each new audio file results in appending further values to those appended by the audio before it.
+
+After a speaker's cumulative_above_subdistribution_value_and_deviation_progressions is fully populated, the final step is to create and save a chart that visualizes the information within cumulative_above_subdistribution_value_and_deviation_progressions. The details of this visualization chart may change after I review the initial output. To start with for now, though, generate this chart to contain two subplots.
+
+The first subplot displays the data populated across all of the first tuple lists in cumulative_above_subdistribution_value_and_deviation_progressions. The subplot should be a line graph where each line corresponds to the first tuple list value set for a particular frequency_bucket_center. The y axis minimum and maximum should be set to 0 and 1, respectively. The x axis should start at 0 and extend to the total amount of time encompassed by all of the list datapoints in the graph, which can be determined by treating each datapoint as having a duration equal to the Spectrogram_Window_Jump_In_Seconds value in Global_Hyperparameters. Set the color of each frequency_bucket_center line to a particular gradient between purple and orange based on the value of the frequency_bucket_center, with the line for the lowest frequency_bucket_center being purple and the line for the highest frequency_bucket_center value being orange.
+
+The second subplot displays the data populated across all of the second tuple lists in cumulative_above_subdistribution_value_and_deviation_progressions. The subplot should be a line graph where each line corresponds to the second tuple list value set for a particular frequency_bucket_center. The y axis minimum and maximum should be set to -1 and 1, respectively. The logic for the x-axis should be equivalent to that of the first subplot, other than containing values from the second tuple list instead of the first. The line color logic should be equivalent to that of the first subplot.
+
+Once this chart is generated for a particular speaker, save the chart with the name [Analysis_Directory + Analysis_Run_Name + f"_voice_comparative_progression_{voice_id}_{[current comparative_voices_audio_set speaker_id]}_{occurrence_ratio_threshold}"].
+
+Once that is done I can run it, review results, and let you know any errors to address and / or changes to make to the final chart visualizations.
+
+
+
+
 
 
 

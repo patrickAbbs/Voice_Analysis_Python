@@ -229,7 +229,7 @@ def Run_Phoneme_Analysis(speaker_audio_dict):
 
 # --- entry point ---
 
-def Run_Layered_Occurence_Count_Population(speaker_audio_dict, subdistribution_layer):
+def Run_Layered_Occurrence_Count_Population(speaker_audio_dict, subdistribution_layer):
     if subdistribution_layer == "universal":
         Run_Universal_Analysis(speaker_audio_dict)
     elif subdistribution_layer == "voice":
