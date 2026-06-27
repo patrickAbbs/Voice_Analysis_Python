@@ -5,11 +5,11 @@ import matplotlib.pyplot as pyplot
 from Global_Hyperparameters import (
     Analysis_Directory, Analysis_Run_Name, Chart_Image_Resolution,
     Spectrogram_Window_Jump_In_Seconds, Subdistribution_Voiced_Frequency_Limit,
-    Subdistribution_Timepoint_Voiced_Ratio_Minimum
+    Subdistribution_Timepoint_Voiced_Ratio_Minimum, Json_Directory
 )
 from Subdistribution_Extractor import Convert_Occurrence_Counts_To_Ratios, Subdistribution_Tier
 from Layered_Occurrence_Count_Populator import Process_Audio
-from Layered_Subdistribution_Generator import Load_Layered_State, Get_Voiced_Frequency_Bucket_Centers, OUTPUT_DIRECTORY
+from Layered_Subdistribution_Generator import Load_Layered_State, Get_Voiced_Frequency_Bucket_Centers
 
 
 # --- helpers ---
@@ -77,7 +77,7 @@ def Run_Voice_Subdistribution_Deviation_Tracking(
 ):
     cumulation_weight = Convert_Half_Life_To_Cumulation_Weight(Spectrogram_Window_Jump_In_Seconds, cumulation_half_life)
 
-    state_path = OUTPUT_DIRECTORY + f"Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts.json"
+    state_path = Json_Directory + f"Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts.json"
     state = Load_Layered_State(state_path)
     if state is None:
         print(f"Voice_Subdistribution_Deviation_Tracker: no data found for voice_id '{voice_id}', aborting")

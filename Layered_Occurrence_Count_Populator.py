@@ -1,14 +1,13 @@
 import json
 import os
 
-from Global_Hyperparameters import Distribution_Types, Spectrogram_Window_Jump_In_Seconds
+from Global_Hyperparameters import Distribution_Types, Spectrogram_Window_Jump_In_Seconds, Json_Directory
 from Spectrogram_Generator import Generate_Audio_Spectrogram
 from Frequency_Distribution_Generator import Generate_Frequency_Bucket_Centers, Generate_Typed_Bucketed_Frequency_Progressions, Generate_Typed_Bucketed_Frequency_Distributions
 from Subdistribution_Extractor import Accumulate_Frequency_Occurrence_Counts, Convert_Occurrence_Counts_To_Ratios, Extract_Frequency_Subdistributions
 
 PHONEME_CORPUS_DIRECTORY = "../Phoneme_Corpus/data/TRAIN/DR1/"
 CORPUS_AUDIO_EXTENSION = ".WAV.wav"
-OUTPUT_DIRECTORY = "tmp/media/output/"
 DISTRIBUTION_TYPE = Distribution_Types[0]
 
 VOICED_PHONEMES = [
@@ -22,22 +21,22 @@ VOICED_PHONEMES_SET = set(VOICED_PHONEMES)
 # --- path helpers ---
 
 def Get_Universal_State_Path():
-    return OUTPUT_DIRECTORY + "Universal_Frequency_Amount_Occurrence_Counts.json"
+    return Json_Directory + "Universal_Frequency_Amount_Occurrence_Counts.json"
 
 def Get_Speaker_State_Path(speaker_id):
-    return OUTPUT_DIRECTORY + f"Speaker_{speaker_id}_Frequency_Amount_Occurrence_Counts.json"
+    return Json_Directory + f"Speaker_{speaker_id}_Frequency_Amount_Occurrence_Counts.json"
 
 def Get_Phoneme_State_Path(phoneme):
-    return OUTPUT_DIRECTORY + f"Phoneme_{phoneme}_Frequency_Amount_Occurrence_Counts.json"
+    return Json_Directory + f"Phoneme_{phoneme}_Frequency_Amount_Occurrence_Counts.json"
 
 def Format_Tier_For_Filename(tier):
     return str(tier).replace(".", "")
 
 def Get_Subtractive_Speaker_State_Path(speaker_id, tier):
-    return OUTPUT_DIRECTORY + f"Speaker_{speaker_id}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
+    return Json_Directory + f"Speaker_{speaker_id}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
 
 def Get_Subtractive_Phoneme_State_Path(phoneme, tier):
-    return OUTPUT_DIRECTORY + f"Phoneme_{phoneme}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
+    return Json_Directory + f"Phoneme_{phoneme}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
 
 
 # --- state persistence ---

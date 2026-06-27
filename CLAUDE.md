@@ -159,6 +159,17 @@ All pipeline state lives in `Audio_Analysis_Data` (defined in `analysis_runner.p
 | `Distribution_Types` | `["logarithmic"]` | which type(s) flow into subdistribution step |
 | `Chart_Image_Resolution` | `250` | DPI for saved PNGs |
 
+## Color Assignment (`Color_Assignment_Manager.py`)
+
+Speaker and phoneme colors are assigned permanently on first encounter and persisted to `tmp/media/output/color_assignments.json`, so the same entity always gets the same color across all chart types and analysis runs.
+
+- `Get_Speaker_Color(speaker_id)` — returns the assigned color for a speaker (or audio file name). Assigns one if not yet seen, using the next available slot in `Subdistribution_Display_Colors` (cyclic).
+- `Get_Phoneme_Color(phoneme)` — same for phoneme labels, tracked in a separate list so phoneme indices don't collide with speaker indices.
+- JSON structure: `{ "speakers": { id: color_name }, "phonemes": { label: color_name } }`
+- Fixed path `tmp/media/output/color_assignments.json` (not inside `Json_Directory`) so assignments persist across runs with different `Json_Directory` configurations.
+
+`Subdistribution_Display_Colors` in `Global_Hyperparameters.py` has been extended from 10 to 50 named matplotlib colors to minimize recycling. All chart-generation code in `Subdistribution_Extractor`, `Subdistribution_Difference_Analyzer`, and `Layered_Subdistribution_Generator` now calls `Get_Speaker_Color` / `Get_Phoneme_Color` instead of computing colors by position at call time.
+
 ## Dependencies
 
 `numpy`, `soundfile`, `librosa`, `matplotlib`. A `venv` is present at the repo root.

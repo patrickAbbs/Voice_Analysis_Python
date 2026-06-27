@@ -2,7 +2,8 @@ import numpy
 import matplotlib.pyplot as pyplot
 
 
-from Global_Hyperparameters import Analysis_Directory, Analysis_Run_Name, Subdistribution_Thresholds, Subdistribution_Voiced_Frequency_Limit, Subdistribution_Timepoint_Voiced_Ratio_Minimum, Subdistribution_Display_Type, Distribution_Types, Chart_Image_Resolution, Subdistribution_Display_Colors
+from Global_Hyperparameters import Analysis_Directory, Analysis_Run_Name, Subdistribution_Thresholds, Subdistribution_Voiced_Frequency_Limit, Subdistribution_Timepoint_Voiced_Ratio_Minimum, Subdistribution_Display_Type, Distribution_Types, Chart_Image_Resolution
+from Color_Assignment_Manager import Get_Speaker_Color
 
 class Typed_Tiered_Subdistributions:
     def __init__(self):
@@ -81,7 +82,7 @@ def Generate_Tiered_Subdistribution_Charts(all_audios_analysis_data):
         subdistribution_included_voiced_frequency_bucket_centers = audio_analysis_entry.Frequency_Bucket_Centers[:voiced_frequency_limit_index]
 
         pyplot.figure(figsize=(20, 24))
-        audio_entry_color = Subdistribution_Display_Colors[all_audios_analysis_data.index(audio_analysis_entry)]
+        audio_entry_color = Get_Speaker_Color(audio_analysis_entry.Audio_File_Name)
         subplot_number = (len(audio_analysis_entry.Typed_Tiered_Subdistributions.Typed_Subdistributions[Subdistribution_Display_Type]) * 100) + 11
         for subdistribution_tier in audio_analysis_entry.Typed_Tiered_Subdistributions.Typed_Subdistributions[Subdistribution_Display_Type]:
             pyplot.subplot(subplot_number)
@@ -100,7 +101,7 @@ def Generate_Tiered_Subdistribution_Charts(all_audios_analysis_data):
             voiced_frequency_limit_index = next((center_index for center_index, center_frequency in enumerate(audio_analysis_entry.Frequency_Bucket_Centers) if center_frequency > Subdistribution_Voiced_Frequency_Limit), None)
             subdistribution_included_voiced_frequency_bucket_centers = audio_analysis_entry.Frequency_Bucket_Centers[:voiced_frequency_limit_index]
 
-            audio_entry_color = Subdistribution_Display_Colors[all_audios_analysis_data.index(audio_analysis_entry)]
+            audio_entry_color = Get_Speaker_Color(audio_analysis_entry.Audio_File_Name)
             audio_subdistribution_tier = audio_analysis_entry.Typed_Tiered_Subdistributions.Typed_Subdistributions[Subdistribution_Display_Type][subdistribution_tier_index]
             pyplot.subplot(subplot_number)
             pyplot.title(f"Name {audio_analysis_entry.Audio_File_Name} | Threshold {audio_subdistribution_tier.Occurrence_Ratio_Threshold} | Sum {audio_subdistribution_tier.Subdistribution_Sum}")

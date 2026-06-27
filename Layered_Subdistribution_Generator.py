@@ -2,10 +2,9 @@ import json
 import os
 import matplotlib.pyplot as pyplot
 
-from Global_Hyperparameters import Analysis_Directory, Analysis_Run_Name, Chart_Image_Resolution, Subdistribution_Display_Colors, Subdistribution_Thresholds
+from Global_Hyperparameters import Analysis_Directory, Analysis_Run_Name, Chart_Image_Resolution, Subdistribution_Thresholds, Json_Directory
+from Color_Assignment_Manager import Get_Speaker_Color, Get_Phoneme_Color
 from Subdistribution_Extractor import Convert_Occurrence_Counts_To_Ratios, Extract_Frequency_Subdistributions, Subdistribution_Tier
-
-OUTPUT_DIRECTORY = "tmp/media/output/"
 
 
 # --- state loading ---
@@ -68,7 +67,7 @@ def Generate_Layered_Subdistribution_Chart(label, subdistribution_tiers, frequen
     subplot_number = (len(subdistribution_tiers) * 100) + 11
     for tier in subdistribution_tiers:
         pyplot.subplot(subplot_number)
-        pyplot.title(f"{label} | Threshold {tier.Occurrence_Ratio_Threshold} | Sum {tier.Subdistribution_Sum:.4f}")
+        pyplot.title(f"{label} | Threshold {tier.Occurrence_Ratio_Threshold} | Sum {tier.Subdistribution_Sum:.4f} | Abs Sum {sum(abs(v) for v in tier.Subdistribution):.4f}")
         pyplot.ylim(y_min, y_max)
         pyplot.bar(frequency_bucket_centers, tier.Subdistribution, color=color, width=bucket_width)
         if y_min < 0:
@@ -82,7 +81,7 @@ def Generate_Layered_Subdistribution_Chart(label, subdistribution_tiers, frequen
 # --- analysis runners ---
 
 def Run_Universal_Generation():
-    path = OUTPUT_DIRECTORY + "Universal_Frequency_Amount_Occurrence_Counts.json"
+    path = Json_Directory + "Universal_Frequency_Amount_Occurrence_Counts.json"
     state = Load_Layered_State(path)
     if state is None:
         print(f"Layered_Subdistribution_Generator: no data at '{path}', skipping universal generation")
@@ -96,14 +95,14 @@ def Run_Universal_Generation():
 
 
 def Run_Voice_Generation(voice_set, allow_negative_subtractive_subdistributions, generate_original_subdistribution_charts, generate_subtractive_subdistribution_charts):
-    universal_state = Load_Layered_State(OUTPUT_DIRECTORY + "Universal_Frequency_Amount_Occurrence_Counts.json")
+    universal_state = Load_Layered_State(Json_Directory + "Universal_Frequency_Amount_Occurrence_Counts.json")
     if universal_state is None:
         print("Layered_Subdistribution_Generator: no universal data found, cannot run voice generation")
         return
     universal_tiers = Get_Tiered_Subdistributions(universal_state)
 
-    for voice_index, speaker_id in enumerate(voice_set):
-        path = OUTPUT_DIRECTORY + f"Speaker_{speaker_id}_Frequency_Amount_Occurrence_Counts.json"
+    for speaker_id in voice_set:
+        path = Json_Directory + f"Speaker_{speaker_id}_Frequency_Amount_Occurrence_Counts.json"
         state = Load_Layered_State(path)
         if state is None:
             print(f"Layered_Subdistribution_Generator: no data for speaker '{speaker_id}', skipping")
@@ -111,7 +110,7 @@ def Run_Voice_Generation(voice_set, allow_negative_subtractive_subdistributions,
 
         voice_tiers = Get_Tiered_Subdistributions(state)
         frequency_bucket_centers = Get_Voiced_Frequency_Bucket_Centers(state)
-        color = Subdistribution_Display_Colors[voice_index % len(Subdistribution_Display_Colors)]
+        color = Get_Speaker_Color(speaker_id)
 
         if generate_original_subdistribution_charts:
             output_path = Analysis_Directory + Analysis_Run_Name + f"_voice_original_subdistributions_{speaker_id}.png"
@@ -128,14 +127,14 @@ def Run_Voice_Generation(voice_set, allow_negative_subtractive_subdistributions,
 
 
 def Run_Phoneme_Generation(phoneme_set, allow_negative_subtractive_subdistributions, generate_original_subdistribution_charts, generate_subtractive_subdistribution_charts):
-    universal_state = Load_Layered_State(OUTPUT_DIRECTORY + "Universal_Frequency_Amount_Occurrence_Counts.json")
+    universal_state = Load_Layered_State(Json_Directory + "Universal_Frequency_Amount_Occurrence_Counts.json")
     if universal_state is None:
         print("Layered_Subdistribution_Generator: no universal data found, cannot run phoneme generation")
         return
     universal_tiers = Get_Tiered_Subdistributions(universal_state)
 
-    for phoneme_index, phoneme in enumerate(phoneme_set):
-        path = OUTPUT_DIRECTORY + f"Phoneme_{phoneme}_Frequency_Amount_Occurrence_Counts.json"
+    for phoneme in phoneme_set:
+        path = Json_Directory + f"Phoneme_{phoneme}_Frequency_Amount_Occurrence_Counts.json"
         state = Load_Layered_State(path)
         if state is None:
             print(f"Layered_Subdistribution_Generator: no data for phoneme '{phoneme}', skipping")
@@ -143,7 +142,7 @@ def Run_Phoneme_Generation(phoneme_set, allow_negative_subtractive_subdistributi
 
         phoneme_tiers = Get_Tiered_Subdistributions(state)
         frequency_bucket_centers = Get_Voiced_Frequency_Bucket_Centers(state)
-        color = Subdistribution_Display_Colors[phoneme_index % len(Subdistribution_Display_Colors)]
+        color = Get_Phoneme_Color(phoneme)
 
         if generate_original_subdistribution_charts:
             output_path = Analysis_Directory + Analysis_Run_Name + f"_phoneme_original_subdistributions_{phoneme}.png"
@@ -215,14 +214,14 @@ def Load_Subtractive_Tiers(path_template):
 # --- subtractive analysis runners ---
 
 def Run_Subtractive_Voice_Generation(voice_set):
-    for voice_index, speaker_id in enumerate(voice_set):
+    for speaker_id in voice_set:
         tiers, frequency_bucket_centers = Load_Subtractive_Tiers(
-            lambda tier, sid=speaker_id: OUTPUT_DIRECTORY + f"Speaker_{sid}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
+            lambda tier, sid=speaker_id: Json_Directory + f"Speaker_{sid}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
         )
         if not tiers:
             print(f"Layered_Subdistribution_Generator: no data found for speaker '{speaker_id}', skipping")
             continue
-        color = Subdistribution_Display_Colors[voice_index % len(Subdistribution_Display_Colors)]
+        color = Get_Speaker_Color(speaker_id)
         output_path = Analysis_Directory + Analysis_Run_Name + f"_subtractive_voice_subdistributions_{speaker_id}.png"
         Generate_Layered_Subdistribution_Chart(f"Voice {speaker_id} (subtractive)", tiers, frequency_bucket_centers, output_path, color)
         print(f"Layered_Subdistribution_Generator: subtractive voice chart saved for '{speaker_id}'")
@@ -230,14 +229,14 @@ def Run_Subtractive_Voice_Generation(voice_set):
 
 
 def Run_Subtractive_Phoneme_Generation(phoneme_set):
-    for phoneme_index, phoneme in enumerate(phoneme_set):
+    for phoneme in phoneme_set:
         tiers, frequency_bucket_centers = Load_Subtractive_Tiers(
-            lambda tier, ph=phoneme: OUTPUT_DIRECTORY + f"Phoneme_{ph}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
+            lambda tier, ph=phoneme: Json_Directory + f"Phoneme_{ph}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
         )
         if not tiers:
             print(f"Layered_Subdistribution_Generator: no data found for phoneme '{phoneme}', skipping")
             continue
-        color = Subdistribution_Display_Colors[phoneme_index % len(Subdistribution_Display_Colors)]
+        color = Get_Phoneme_Color(phoneme)
         output_path = Analysis_Directory + Analysis_Run_Name + f"_subtractive_phoneme_subdistributions_{phoneme}.png"
         Generate_Layered_Subdistribution_Chart(f"Phoneme {phoneme} (subtractive)", tiers, frequency_bucket_centers, output_path, color)
         print(f"Layered_Subdistribution_Generator: subtractive phoneme chart saved for '{phoneme}'")
