@@ -43,11 +43,12 @@ def Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progr
     return frequency_amount_occurrence_counts, voiced_frequency_timepoints_count
 
 
-def Convert_Occurrence_Counts_To_Ratios(frequency_amount_occurrence_counts, voiced_frequency_timepoints_count):
+def Convert_Occurrence_Counts_To_Ratios(frequency_amount_occurrence_counts, voiced_frequency_timepoints_count, invert=False):
     frequency_amount_occurrence_ratios = [{} for _ in range(len(frequency_amount_occurrence_counts))]
     for frequency_bucket_index in range(len(frequency_amount_occurrence_counts)):
         for distribution_ratio, occurrence_count in frequency_amount_occurrence_counts[frequency_bucket_index].items():
-            frequency_amount_occurrence_ratios[frequency_bucket_index][distribution_ratio] = occurrence_count / voiced_frequency_timepoints_count
+            ratio = occurrence_count / voiced_frequency_timepoints_count
+            frequency_amount_occurrence_ratios[frequency_bucket_index][distribution_ratio] = (1.0 - ratio) if invert else ratio
     return frequency_amount_occurrence_ratios
 
 

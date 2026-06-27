@@ -11,6 +11,7 @@ from Subdistribution_Difference_Analyzer import Analyze_Subdistribution_Differen
 from Layered_Occurrence_Count_Populator import Run_Layered_Occurrence_Count_Population, Run_Subtractive_Layered_Occurrence_Count_Population
 from Layered_Subdistribution_Generator import Run_Layered_Subdistribution_Generation, Run_Subtractive_Layered_Subdistribution_Generation
 from Voice_Subdistribution_Deviation_Tracker import Run_Voice_Subdistribution_Deviation_Tracking
+from Occurrence_Ratio_Divergence_Match_Score_Tracker import Run_Occurrence_Ratio_Divergence_Match_Score_Tracking
 
 Layered_Subdistribution_Audio_Set = {
     "FCJF0": ["SA1", "SA2", "SI648", "SI1027", "SI1657", "SX37", "SX127", "SX217", "SX307", "SX397"], 
@@ -61,8 +62,17 @@ def Run_Subtractive_Subdstributions():
 def Run_Voice_Subdistribution_Deviation_Analysis():
     Run_Voice_Subdistribution_Deviation_Tracking("FECD0", Layered_Subdistribution_Audio_Set, 0.9875, 0.3)
 
+def Run_Occurrence_Ratio_Divergence_Match_Score_Analysis():
+    Run_Occurrence_Ratio_Divergence_Match_Score_Tracking("FCJF0", Layered_Subdistribution_Audio_Set, {
+        "occurrence_ratio_cumulation_half_life": 0.1,
+        "positive_contribution_range": 0.5,
+        "positive_weight_power_curve": 0.5,
+        "negative_weight_proximity_half_distance_increment": 1.0
+    })
+
 
 #Run_Analysis()
 #Run_Subdstributions()
-Run_Subtractive_Subdstributions()
+#Run_Subtractive_Subdstributions()
 #Run_Voice_Subdistribution_Deviation_Analysis()
+Run_Occurrence_Ratio_Divergence_Match_Score_Analysis()

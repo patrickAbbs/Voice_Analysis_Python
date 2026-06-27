@@ -200,8 +200,84 @@ Once this chart is generated for a particular speaker, save the chart with the n
 Once that is done I can run it, review results, and let you know any errors to address and / or changes to make to the final chart visualizations.
 
 
+-------------------------------------------------------------------------------------------------------
 
 
+FYI, I implemented a few small changes mostly around directory path variable names. None of the changes functionally impact any of the analysis modules.
+
+Before getting started on the next analysis module, there is a small refactor I want you to do around how speaker and phoneme colors are selected for different speakers when generating visualization charts. Currently, there is a Subdistribution_Display_Colors list of colors set in Global_Hyperparameters, and speaker and phoneme colors for various charts are selected on-the-fly by cyclically iterating through the Subdistribution_Display_Colors list based on the index of the speaker or phoneme in the input of the function calling the chart generation.
+
+Instead, I would like for each speaker and phoneme to be assigned a permanent color whenever they are first processed, which will then always be used when they are processed in future. To do this, persist speaker and phoneme color assignments in separate lists within a color_assignments.json file you can create and store in the tmp/media/output/ folder. The logic for initial color assignment can be similar to the current logic, where Subdistribution_Display_Colors is cyclically iterated through based on what the index of each new speaker or phoneme will be in their respective assignments list. Although, please extend the current Subdistribution_Display_Colors list with as many named colors as you know of that pyplot will recognize, so that there is less color assignment repetition / recycling.
+
+
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to implement another analysis module called Occurrence_Ratio_Divergence_Match_Score_Tracker. This will have several similarities with parts of the most recent Voice_Subdistribution_Deviation_Tracker module, so feel free to reuse existing code where relevant and / or extract pieces of shared logic into mutually accessible functions. To start, create a new file called Occurrence_Ratio_Divergence_Match_Score_Tracker, and create a function within it called Run_Occurrence_Ratio_Divergence_Match_Score_Tracking(). The Run_Occurrence_Ratio_Divergence_Match_Score_Tracking() function should take the following user-provided input parameters:
+    1) voice_id, which is functionally equivalent to the voice_id parameter for the recently added Run_Voice_Subdistribution_Deviation_Tracking() function
+    2) comparative_voices_audio_set, which is functionally equivalent to the comparative_voices_audio_set parameter for Run_Voice_Subdistribution_Deviation_Tracking()
+    3) hyperparameters, which is a dictionary<string, float> that should contain key->value pairs for the following hyperparameters that will be used in various parts of function logic:
+        a) occurrence_ratio_cumulation_half_life, which will be set to a positive float value
+        b) positive_contribution_range, which will be set to a 0.0 -> 1.0 value
+        c) positive_weight_power_curve, which will be set to a positive float value
+        d) negative_weight_proximity_half_distance_increment, which will be set to a positive float value
+
+The first thing that Run_Occurrence_Ratio_Divergence_Match_Score_Tracking() should do is convert the occurrence_ratio_cumulation_half_life hyperparameter value into an occurrence_ratio_cumulation_weight value, which should also be stored within the hyperparameters dictionary. This can be done by reusing the implemented Convert_Half_Life_To_Cumulation_Weight() helper function, with processing_window_duration again set to the global Spectrogram_Window_Jump_In_Seconds value.
+
+Next, load the Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts.json file for the parametered voice_id, and convert the data from occurrence_counts form to occurrence_ratios form with the Convert_Occurrence_Counts_To_Ratios() function in Subdistribution_Extractor. However, rather than using this occurrence_ratios data to populate a subdistribution_tier for a particular occurrence_ratio threshold as is done in most other modules, instead the full occurrence_ratios data will be used for lookups in later parts of the function. Also, each value in this populated occurrence_ratio data should be "inverted" to be set to (1.0 - itself). So, for example, if occurrence_ratios entries for a particular frequency_bucket are populated by Convert_Occurrence_Counts_To_Ratios() as { 0.01: 0.9, 0.02: 0.75, 0.03: 0.6 }, then this should be transformed to { 0.01: 0.1, 0.02: 0.25, 0.03: 0.4 }. We might refactor Convert_Occurrence_Counts_To_Ratios() to always return this inverted form at some point, but for now just implement it as a new boolean-parametered option to Convert_Occurrence_Counts_To_Ratios() that is set to false for all already implemented Convert_Occurrence_Counts_To_Ratios() calls.
+
+The next step is somewhat similar to the logic in Run_Voice_Subdistribution_Deviation_Tracking() for populating speaker-specific cumulative_above_subdistribution_value_and_deviation_progressions. In this case, for each speaker_id key in comparative_voices_audio_set we want to populate three speaker-specific variables. The first one is a dictionary<float, list<float>> called cumulative_comparative_occurrence_ratios, the second is also a dictionary<float, list<float>> called match_contribution_weights, and the final one is a list<float> called match_scores.
+
+Each top-level float key for both cumulative_comparative_occurrence_ratios and match_contribution_weights should correspond to each frequency_bucket_center as populated by the Get_Voiced_Frequency_Bucket_Centers() function in Layered_Subdistribution_Generator. The first value in the each list for cumulative_comparative_occurrence_ratios should be initialized to 0.5, the first value in each list for match_contribution_weights should be initialized to 0, and the first value for the match_scores list should be initialized to 0.5.
+
+To populate the list for each frequency_bucket_center in a speaker's cumulative_comparative_occurrence_ratios and match_contribution_weights, we are going to iterate through each audio listed for the speaker within comparative_voices_audio_set. Like the Run_Voice_Subdistribution_Deviation_Tracking() function, the first step for each audio is to extract {distribution, audio_frequency_bucket_centers, timepoint_phonemes} with the Process_Audio() function, then iterate through each timepoint and skip any that do not meet the two filter conditions. Also like Run_Voice_Subdistribution_Deviation_Tracking(), the next step is to iterate through each frequency_bucket_center-corresponding entry for the timepoint and get its corresponding timepoint_frequency_ratio.
+
+Like Run_Voice_Subdistribution_Deviation_Tracking(), we now want to calculate new values to append to the cumulative_comparative_occurrence_ratios and match_contribution_weights list corresponding to the current timepoint_frequency_ratio's frequency_bucket_center within cumulative_comparative_occurrence_ratios for the speaker. 
+
+Also like Run_Voice_Subdistribution_Deviation_Tracking(), the new appended cumulative_comparative_occurrence_ratio value for the cumulative_comparative_occurrence_ratios list is calculated using the Weighted_Average() helper function implemented last time, although the value_2 parameter for this Weighted_Average() call is determined differently using logic as follows:
+    1) Search within the current frequency_bucket_center entry of the occurrence_ratios data that was extracted earlier for the voice_id
+    2) Set value_2 to the pointed-to value of whichever key is closest to the current timepoint_frequency_ratio value. So, for example, if the occurrence_ratio frequency_bucket_center data contains entries { 0.01: 0.9, 0.02: 0.75, 0.03: 0.6 }, and the current timepoint_frequency_ratio value is 0.018, then value_2 should be set to 0.75 since the 0.02 key that points to 0.75 is the closest to timepoint_frequency_ratio.
+
+As a bit of context / explanation, what this value_2 setting logic is effectively doing is getting a timepoint_frequency_ratio for some speaker that is being compared to the voice_id, and seeing where within the voice_id's range for that frequency it falls by converting it to the occurrence_ratio percentile that it would be for the voice_id. Anyway, altogether this means that the values and weights for the Weighted_Average() call that calculates the new appended cumulative_comparative_occurrence_ratios list value should be:
+    1) value_1 is the current last value in the list
+    2) weight_1 is the occurrence_ratio_cumulation_weight hyperparameter as calculated earlier by Convert_Half_Life_To_Cumulation_Weight()
+    3) value_2 is the looked-up value described above
+    4) weight_2 is (1 - weight_1)
+
+For the match_contribution_weights list, its new appended match_contribution_weight value is calculated as a function of the new cumulative_comparative_occurrence_ratio value that was just appended to the cumulative_comparative_occurrence_ratios list. The logic for this calculation is as follows:
+    1) If the new cumulative_comparative_occurrence_ratio value is between (0.5 - (positive_contribution_range * 0.5)) and (0.5 + (positive_contribution_range * 0.5)), then calculate new match_contribution_weight value as ((1.0 - (abs([cumulative_comparative_occurrence_ratio] - 0.5) / (0.5 * positive_contribution_range))) ** positive_weight_power_curve)
+    2) Otherwise, the new match_contribution_weight value is calculated as follows:
+        a) crossing_point_proximity = (1 - [cumulative_comparative_occurrence_ratio]) if [cumulative_comparative_occurrence_ratio] > 0.5 else [cumulative_comparative_occurrence_ratio]
+        b) crossing_point_proximity_ratio = (crossing_point_proximity / (0.5 * (1 - positive_contribution_range)))
+        c) crossing_point_proximity_half_distance = math.log(crossing_point_proximity_ratio, 0.5)
+        d) new_second_value = (crossing_point_proximity_half_distance * negative_weight_proximity_half_distance_increment)
+
+Also, add an inline comment above the match_contribution_weights list value calculation logic that says "Below match_contribution_weight logic for positive contributions is power_curved proximity to 0.5, and logic for negative contributions is multiplicatively scaled power of 0.5 to produce [positive<->negative contribution crossing point proximity]. Consider experimenting with alternative calculation logic approaches, particularly for negative contribution (e.g. maybe power_curved rather than multiplicatively scaled, or maybe a different 'base function' than power of 0.5 to produce [positive<->negative contribution crossing point proximity])".
+
+Next, the speaker's match_scores list has a single new value calculated and appended for each timepoint, which is calculated after cumulative_comparative_occurrence_ratios and match_contribution_weights have both been fully populated for the timepoint. The logic to calculate this timepoint match_score is as follows:
+    1) Each frequency_bucket_center has a match contribution weight that is set to its corresponding match_contribution_weight value for the timepoint
+    2) Each frequency_bucket_center has a match contribution value that is set to 1.0 if its corresponding cumulative_comparative_occurrence_ratio value for the timepoint is between (0.5 - (positive_contribution_range * 0.5)) and (0.5 + (positive_contribution_range * 0.5)), otherwise 0.0.
+    3) match_score for the timepoint is calculated as the weighted average of all frequency_bucket_center match contribution values weighted by corresponding match contribution weights
+
+After a speaker's cumulative_comparative_occurrence_ratios, match_contribution_weights, and match_scores are all fully populated, the next step is to create and save a chart that visualizes this information. This chart should have three subplots.
+
+The first subplot is a line graph that displays a single line visualizing the match_scores list. The y axis minimum and maximum should be set to 0 and 1, respectively. The x axis should start at 0 and extend to the total amount of time encompassed by all of the list datapoints in the graph, which can be determined by treating each datapoint as having a duration equal to the Spectrogram_Window_Jump_In_Seconds value in Global_Hyperparameters. Set the color of the line using the Get_Speaker_Color() function you just implemented for the current comparative_voices_audio_set speaker_id.
+
+The second subplot is a line graph that displays the cumulative_comparative_occurrence_ratios data, where each line corresponds to the list value set for a particular frequency_bucket_center. The y axis minimum and maximum should be 0.0 and 1.0, respectively, and the x axis should be the same as for the first plot. Set the color of each frequency_bucket_center line to a particular gradient between purple and orange based on the value of the frequency_bucket_center, with the line for the lowest frequency_bucket_center being purple and the line for the highest frequency_bucket_center value being orange.
+
+The third subplot is a line graph that displays a slightly modified version of the match_contribution_weights data, where each line corresponds to a transformation of the list value set for a particular frequency_bucket_center. The y axis maximum should be (1.0 + [the highest value across all frequency_bucket_centers and timepoints for match_contribution_weights]), and y axis minimum should be (-1 * y axis maximum). The x axis should the same as for the first two plots, and the line colors should be same as for the second plot. 
+
+Rather than setting the y value for each frequency_bucket_center timepoint directly to its match_contribution_weight value, instead the y value is calculated as a particular transformation of this match_contribution_weight. The logic used for this transformation is determined depending on the corresponding frequency_bucket_center timepoint value within cumulative_comparative_occurrence_ratios, with the following conditional branches:
+    1) If the corresponding cumulative_comparative_occurrence_ratio value is less than (0.5 - (positive_contribution_range * 0.5)), then y value is calculated as (-1 * match_contribution_weight) - 1
+    2) If the corresponding cumulative_comparative_occurrence_ratio value is between (0.5 - (positive_contribution_range * 0.5)) and 0.5, then y value is calculated as (1 - match_contribution_weight) * -1
+    3) If the corresponding cumulative_comparative_occurrence_ratio value is between 0.5 and (0.5 + (positive_contribution_range * 0.5)), then y value is calculated as (1 - match_contribution_weight)
+    4) If the corresponding cumulative_comparative_occurrence_ratio value is greater than (0.5 + (positive_contribution_range * 0.5)), then y value is calculated as match_contribution_weight + 1
+
+Once this chart is generated for a particular speaker, save the chart with the name [Analysis_Directory + Analysis_Run_Name + f"_voice_match_score_progression_{voice_id}_{[current comparative_voices_audio_set speaker_id]}"].
+
+Finally, generate one more chart with just a single subplot at the end of the Run_Occurrence_Ratio_Divergence_Match_Score_Tracking() function after all comparative_voices_audio_set speakers have been processed. This chart's subplot is a line graph that visualizes match_scores data across all comparative_voices_audio_set speakers, where each line corresponds to the match_scores list populated for each speaker. The y axis minimum and maximum should be 0.0 and 1.0, respectively, and the x axis should be the same as for all of the earlier plots. Set the color of each line using the Get_Speaker_Color() function for the lines corresponding comparative_voices_audio_set speaker_id. As a note, generating this final chart will require holding on to match_scores across all comparative_voices_audio_set speaker_ids, but not holding onto cumulative_comparative_occurrence_ratios or match_contribution_weights.
+
+Once that is done, I can run it and review results.
 
 
 
