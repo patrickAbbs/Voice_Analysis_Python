@@ -280,13 +280,40 @@ Finally, generate one more chart with just a single subplot at the end of the Ru
 Once that is done, I can run it and review results.
 
 
+-------------------------------------------------------------------------------------------------------
 
 
+Next, I want you to implement another analysis module called Occurrence_Ratio_Percentile_Shape_Visualizer. This will be a standalone module that should be relatively simpler than other recent modules. To start, create a new file called Occurrence_Ratio_Percentile_Shape_Visualizer, and create a function within it called Visualize_Occurrence_Ratio_Percentile_Shapes(). The Visualize_Occurrence_Ratio_Percentile_Shapes() function should take only one input parameter voice_ids, which will be a list of voice_ids such as ["FCJF0", "MEDR0"].
+
+Visualize_Occurrence_Ratio_Percentile_Shapes() will be iterating through and generating a chart for each voice_id in voice_ids separately. So, I will describe the processing logic that should be performed for a single voice_id, which should then be repeated across all voice_ids.
+
+The first thing that Visualize_Occurrence_Ratio_Percentile_Shapes() should do for a voice_id is load its Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts.json file. We then want to convert the loaded frequency_amount_occurrence_counts data for each frequency_bucket for the voice_id from being a dictionary of (frequency_ratio -> occurrence_count) key-value pairs to being an ordered reconstructed list of every frequency_ratio that has been counted for the frequency_bucket. Feel free to implement this some other way, but the first approach that occurs to me is something like this:
+    1) Sort all (frequency_ratio -> occurrence_count) key-value pairs into a list ordered descending by frequency_ratio
+    2) Iterate through each pair, and append each pair's frequency_ratio to the reconstructed all-timepoint frequency_ratio list a number of times equal to the integer gap between the pair's occurrence_count and the occurrence_count of the pair before it. So, for example, key-value pairs [(0.01: 1), (0.009: 4), (0.008: 5)] would result in list values [0.01, 0.009, 0.009, 0.009, 0.009, 0.008]
+
+My thinking for this approach is that the gap in occurrence count between each entry and the previous entry in the list indicates how often that entry's exact frequency_ratio was observed when building the Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts.json. But, if you have a more elegant way of doing that, feel free. As a potential validation check, each resulting frequency_bucket's list of frequency_ratios should be exactly as long as the voiced_frequency_timepoints_count, since there should be one frequency_ratio per timepoint.
+
+Once this transformation is done, visualize the resulting list of frequency_ratios across frequency_buckets in a chart. For now the chart should just have a single subplot, although we will likely add more after I take a look at the initial output. This starting subplot should be a line graph where each line corresponds to the ordered list of frequency_ratios for a particular frequency_bucket. The y axis minimum and maximum should be whatever the highest and lowest frequency_ratio values are across all lists for all frequency_buckets. The x axis should start at 0 and end at 1, with each frequency_ratio datapoint at an x-value of ([frequency_ratio index] / voiced_frequency_timepoints_count) such that all datapoints end up evenly spaced from 0 to 1. Set the color of each frequency_bucket line to a particular gradient between purple and orange based on the value of the frequency_bucket, with the line for the lowest frequency_bucket being purple and the line for the highest frequency_bucket value being orange.
+
+Once that is done I can run it and take a look, and then we will likely add one or two more subplots to visualize the same data using some forms of normalization.
+
+--------------------------
+
+Okay, looks good. Next let's try adding some additional subplots that normalize the data a bit. The general goal here is to see what kinds of equations would describe these percentile lists with the best balance of precision, accuracy, and simplicity, since I want to come up with a way to represent frequency_bucket's frequency_ratios percentile list with a compact and efficient equation rather than a full listing of all observed frequency_ratios.
+
+I am open to suggestions on how to explore / approach this. One way that occurs to me to look at it would be to normalize the scale of all frequency_ratio lists by scaling all of their values to have the same highest and lowest value, and add this as another subplot below the non-normalized subplot.
+
+--------------------------
+
+Interesting, the log y plots even further amplified the curve so are probably not a good equational fit. I suspect that one of the most appropriate modeling functions would be a bell curve of ordered frequency_ratio proximity densities, with the center of the bell curve at the middle percentile value. Could you replace the log y plot with a plot that translates each frequency_ratio density list into a normalized-area bell curve of frequency_ratio proximity densities? Feel free to ask for clarifications if that is not clear.
 
 
+--------------------------
 
-
-
+That one is closer, but still not quite what I am looking for. For now keep it as the third subplot, and try adding a fourth subplot as follows:
+    1) Each datapoint value in a frequency_bucket's frequency_ratios percentile list is mapped to the x-axis instead of the y-axis.
+    2) Each datapoint's y-axis value is then calculated as the number of neighboring datapoints that fall within a certain parameterized distance of the datapoint. So, for example, if this distance were set to 0.0015, then the third datapoint in the datapoint list [0.011, 0.009, 0.009, 0.009, 0.008, 0.007] would have a calculated y value of 3, because 3 other datapoints (the second, fourth, and fifth) have values within a 0.0015 distance of the third datapoint.
+    3) After this value has been calculated for all datapoints for a given frequency_bucket, these values are normalized so that they sum to 1.0.
 
 
 
