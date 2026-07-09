@@ -34,6 +34,34 @@ def _Lookup_Closest_Value(bucket, sorted_keys, target):
     return bucket[closest_key]
 
 
+def _Extract_Bell_Curve_Projections(inverted_occurrence_ratios):
+    # For each bucket, find the distribution_ratio key whose inverted_occurrence_ratio
+    # is closest to each of the three target values:
+    #   0.5     = median (projected_bell_curve_center)
+    #   0.84135 = 16th-percentile key (below center) → left std = center - that key
+    #   0.15865 = 84th-percentile key (above center) → right std = that key - center
+    # Stored as (center, projected_lower_standard_deviation, projected_upper_standard_deviation).
+    projections = []
+    for bucket in inverted_occurrence_ratios:
+        center = min(bucket.items(), key=lambda kv: abs(kv[1] - 0.5))[0]
+        lower_percentile_key = min(bucket.items(), key=lambda kv: abs(kv[1] - 0.15865))[0]
+        upper_percentile_key = min(bucket.items(), key=lambda kv: abs(kv[1] - 0.84135))[0]
+        projected_lower_standard_deviation = center - lower_percentile_key
+        projected_upper_standard_deviation = upper_percentile_key - center
+        projections.append((center, projected_lower_standard_deviation, projected_upper_standard_deviation))
+    return projections
+
+
+_SQRT2 = math.sqrt(2.0)
+
+def _Bell_Curve_Value2(timepoint_frequency_ratio, center, projected_lower_standard_deviation, projected_upper_standard_deviation):
+    std = projected_lower_standard_deviation if timepoint_frequency_ratio < center else projected_upper_standard_deviation
+    if std <= 0.0:
+        return 0.5
+    z_score = (timepoint_frequency_ratio - center) / std
+    return 0.5 * (1.0 + math.erf(z_score / _SQRT2))
+
+
 def _Freq_Colors(voiced_frequency_bucket_centers):
     n = len(voiced_frequency_bucket_centers)
     purple = numpy.array([0.502, 0.0, 0.502])
@@ -147,7 +175,8 @@ def Generate_Combined_Match_Score_Chart(voice_id, all_speaker_match_scores):
 def Run_Occurrence_Ratio_Divergence_Match_Score_Tracking(
     voice_id,
     comparative_voices_audio_set,
-    hyperparameters
+    hyperparameters,
+    use_bell_curve_percentile_projection=False
 ):
     hyperparameters["occurrence_ratio_cumulation_weight"] = Convert_Half_Life_To_Cumulation_Weight(
         Spectrogram_Window_Jump_In_Seconds, hyperparameters["occurrence_ratio_cumulation_half_life"]
@@ -171,7 +200,14 @@ def Run_Occurrence_Ratio_Divergence_Match_Score_Tracking(
         state["total_voiced_frequency_timepoints_count"],
         invert=True
     )
-    sorted_keys_per_bucket = _Build_Sorted_Keys(inverted_occurrence_ratios)
+
+    if use_bell_curve_percentile_projection:
+        bell_curve_projections = _Extract_Bell_Curve_Projections(inverted_occurrence_ratios)
+        inverted_occurrence_ratios = None
+        sorted_keys_per_bucket = None
+    else:
+        bell_curve_projections = None
+        sorted_keys_per_bucket = _Build_Sorted_Keys(inverted_occurrence_ratios)
 
     voiced_frequency_bucket_centers = Get_Voiced_Frequency_Bucket_Centers(state)
     voiced_frequency_limit_index = len(voiced_frequency_bucket_centers)
@@ -197,11 +233,15 @@ def Run_Occurrence_Ratio_Divergence_Match_Score_Tracking(
                 for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
                     timepoint_frequency_ratio = float(distribution[freq_index][timepoint_index])
 
-                    value_2 = _Lookup_Closest_Value(
-                        inverted_occurrence_ratios[freq_index],
-                        sorted_keys_per_bucket[freq_index],
-                        timepoint_frequency_ratio
-                    )
+                    if use_bell_curve_percentile_projection:
+                        center, lower_sd, upper_sd = bell_curve_projections[freq_index]
+                        value_2 = _Bell_Curve_Value2(timepoint_frequency_ratio, center, lower_sd, upper_sd)
+                    else:
+                        value_2 = _Lookup_Closest_Value(
+                            inverted_occurrence_ratios[freq_index],
+                            sorted_keys_per_bucket[freq_index],
+                            timepoint_frequency_ratio
+                        )
 
                     value_1 = cumulative_comparative_occurrence_ratios[freq_center][-1]
                     new_ratio = Weighted_Average(value_1, occurrence_ratio_cumulation_weight, value_2, 1.0 - occurrence_ratio_cumulation_weight)

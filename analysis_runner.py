@@ -69,7 +69,8 @@ def Run_Occurrence_Ratio_Divergence_Match_Score_Analysis():
         "positive_contribution_range": 0.5,
         "positive_weight_power_curve": 0.5,
         "negative_weight_proximity_half_distance_increment": 1.0
-    })
+    },
+    use_bell_curve_percentile_projection=True)
 
 def Run_Visualize_Occurrence_Ratio_Percentile_Shapes():
     #Visualize_Occurrence_Ratio_Percentile_Shapes(["FCJF0", "MEDR0"], proximity_density_distance=0.001)
@@ -79,5 +80,5 @@ def Run_Visualize_Occurrence_Ratio_Percentile_Shapes():
 #Run_Subdstributions()
 #Run_Subtractive_Subdstributions()
 #Run_Voice_Subdistribution_Deviation_Analysis()
-#Run_Occurrence_Ratio_Divergence_Match_Score_Analysis()
-Run_Visualize_Occurrence_Ratio_Percentile_Shapes()
+Run_Occurrence_Ratio_Divergence_Match_Score_Analysis()
+#Run_Visualize_Occurrence_Ratio_Percentile_Shapes()

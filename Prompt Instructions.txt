@@ -312,8 +312,29 @@ Interesting, the log y plots even further amplified the curve so are probably no
 
 That one is closer, but still not quite what I am looking for. For now keep it as the third subplot, and try adding a fourth subplot as follows:
     1) Each datapoint value in a frequency_bucket's frequency_ratios percentile list is mapped to the x-axis instead of the y-axis.
-    2) Each datapoint's y-axis value is then calculated as the number of neighboring datapoints that fall within a certain parameterized distance of the datapoint. So, for example, if this distance were set to 0.0015, then the third datapoint in the datapoint list [0.011, 0.009, 0.009, 0.009, 0.008, 0.007] would have a calculated y value of 3, because 3 other datapoints (the second, fourth, and fifth) have values within a 0.0015 distance of the third datapoint.
+    2) Each datapoint's pre-normalization y value is then calculated as the number of neighboring datapoints that fall within a certain parameterized distance of the datapoint. So, for example, if this distance were set to 0.0015, then the third datapoint in the datapoint list [0.011, 0.009, 0.009, 0.009, 0.008, 0.007] would have a calculated y value of 3, because 3 other datapoints (the second, fourth, and fifth) have values within a 0.0015 distance of the third datapoint.
     3) After this value has been calculated for all datapoints for a given frequency_bucket, these values are normalized so that they sum to 1.0.
+
+
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to implement an extension to the Occurrence_Ratio_Divergence_Match_Score_Tracker module. The goal of this extension to add an optional alternative logic pathway to the Run_Occurrence_Ratio_Divergence_Match_Score_Tracking() function that uses an approximation function to calculate the value_2 variable used in the function instead of directly looking up the value_2 value using the more memory-intensive inverted_occurrence_ratios lookup. This new logic path should be optional, so that the Run_Occurrence_Ratio_Divergence_Match_Score_Tracking() function can be run with either the current lookup-based logic or the new functional approximation logic.
+
+To start for this extension, the Run_Occurrence_Ratio_Divergence_Match_Score_Tracking() function should take a new Boolean parameter use_bell_curve_percentile_projection that if set to true uses the new logic path, and if set to false uses the old lookup logic path.
+
+If use_bell_curve_percentile_projection is set to true, then after the inverted_occurrence_ratios variable is loaded it should be used to extract three values for each frequency_bucket_center, after which inverted_occurrence_ratios is no longer needed. The first value to extract for each frequency_bucket_center is the distribution_ratio key that is pointing to an inverted_occurrence_ratio value that is closest to 0.5, which can be called the "projected_bell_curve_center". The second value to extract is the distribution_ratio key that is pointing to an inverted_occurrence_ratio value that is closest to 0.15865, which can be called the "projected_lower_standard_deviation", and the third value to extract is the distribution_ratio key that is pointing to an inverted_occurrence_ratio value that is closest to 0.84135, which can be called the "projected_upper_standard_deviation".
+
+These three values for each frequency_bucket_center are then used for a new alternative value_2 calculation later in the Run_Occurrence_Ratio_Divergence_Match_Score_Tracking() function. This new value_2 calculation should work as follows:
+    1) Calculate the z-score of timepoint_frequency_ratio by setting z-score input parameter values as follows:
+        a) raw score is timepoint_frequency_ratio
+        b) mean is projected_bell_curve_center for the frequency_bucket_center at hand
+        c) standard deviation is projected_lower_standard_deviation if timepoint_frequency_ratio is less than projected_bell_curve_center, else projected_upper_standard_deviation
+    2) Convert the z-score to a 0.0 -> 1.0 range percentile ratio of where the z-score is along a bell curve, and set value_2 to this 0.0 -> 1.0 percentile ratio.
+
+The result should be that value_2 is now calculated via equation, but retains the same functional role as it has in the original logic path of providing an approximate 0.0 -> 1.0 percentile ratio for a particular timepoint_frequency_ratio for a particular frequency_bucket_center.
+
+Once this is implemented, I can test out the new logic path to see how the functional approximation approach performs.
 
 
 
