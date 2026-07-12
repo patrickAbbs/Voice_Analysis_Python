@@ -43,7 +43,7 @@ Audio_File_Set = ["normal_1", "no_nose_1", "round_1"]
 #Audio_File_Set = ["normal_1"]
 #Audio_File_Set = ["round_1", "round_2", "round_3"]
 
-Analysis_Directory = "tmp/media/layered_subdistributions/6000_test_projected_bell_curve/"
+Analysis_Directory = "tmp/media/layered_subdistributions/6000_multi_type_element_contributions/"
 Analysis_Run_Name = "lookup"
 
 

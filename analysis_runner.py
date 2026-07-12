@@ -11,7 +11,7 @@ from Subdistribution_Difference_Analyzer import Analyze_Subdistribution_Differen
 from Layered_Occurrence_Count_Populator import Run_Layered_Occurrence_Count_Population, Run_Subtractive_Layered_Occurrence_Count_Population
 from Layered_Subdistribution_Generator import Run_Layered_Subdistribution_Generation, Run_Subtractive_Layered_Subdistribution_Generation
 from Voice_Subdistribution_Deviation_Tracker import Run_Voice_Subdistribution_Deviation_Tracking
-from Occurrence_Ratio_Divergence_Match_Score_Tracker import Run_Occurrence_Ratio_Divergence_Match_Score_Tracking
+from Element_Match_Contribution_Type_Explorer import Run_Element_Match_Contribution_Type_Exploration
 from Occurrence_Ratio_Percentile_Shape_Visualizer import Visualize_Occurrence_Ratio_Percentile_Shapes
 
 Layered_Subdistribution_Audio_Set = {
@@ -63,14 +63,44 @@ def Run_Subtractive_Subdstributions():
 def Run_Voice_Subdistribution_Deviation_Analysis():
     Run_Voice_Subdistribution_Deviation_Tracking("FECD0", Layered_Subdistribution_Audio_Set, 0.9875, 0.3)
 
-def Run_Occurrence_Ratio_Divergence_Match_Score_Analysis():
-    Run_Occurrence_Ratio_Divergence_Match_Score_Tracking("MDAC0", Layered_Subdistribution_Audio_Set, {
-        "occurrence_ratio_cumulation_half_life": 0.2,
-        "positive_contribution_range": 0.5,
-        "positive_weight_power_curve": 0.5,
-        "negative_weight_proximity_half_distance_increment": 1.0
-    },
-    use_bell_curve_percentile_projection=True)
+def Run_Element_Match_Contribution_Type_Analysis():
+    Run_Element_Match_Contribution_Type_Exploration("FCJF0", Layered_Subdistribution_Audio_Set,
+        aggregate_match_types={
+            "weighted_binary_match_contribution": {
+                "include_variant": True,
+                "hyperparameters": {
+                    "positive_contribution_range": 0.5,
+                    "positive_weight_power_curve": 0.5,
+                    "negative_weight_proximity_half_distance_increment": 1.0
+                }
+            },
+            "occurrence_percentile_deviation": {
+                "include_variant": True,
+                "hyperparameters": {}
+            },
+            "occurrence_percentile_inverse_deviation": {
+                "include_variant": True,
+                "hyperparameters": {
+                    "deviation_power_curve": 1.0,
+                    "inverse_deviation_minimum": -100.0
+                }
+            },
+            "occurrence_percentile_half_distance": {
+                "include_variant": True,
+                "hyperparameters": {
+                    "half_distance_minimum": -10.0
+                }
+            },
+            "raw_distance": {
+                "include_variant": True,
+                "hyperparameters": {}
+            }
+        },
+        cross_type_hyperparameters={
+            "use_bell_curve_percentile_projection": True,
+            "occurrence_ratio_cumulation_half_life": 0.2
+        }
+    )
 
 def Run_Visualize_Occurrence_Ratio_Percentile_Shapes():
     #Visualize_Occurrence_Ratio_Percentile_Shapes(["FCJF0", "MEDR0"], proximity_density_distance=0.001)
@@ -80,5 +110,5 @@ def Run_Visualize_Occurrence_Ratio_Percentile_Shapes():
 #Run_Subdstributions()
 #Run_Subtractive_Subdstributions()
 #Run_Voice_Subdistribution_Deviation_Analysis()
-Run_Occurrence_Ratio_Divergence_Match_Score_Analysis()
+Run_Element_Match_Contribution_Type_Analysis()
 #Run_Visualize_Occurrence_Ratio_Percentile_Shapes()

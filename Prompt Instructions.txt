@@ -337,5 +337,89 @@ The result should be that value_2 is now calculated via equation, but retains th
 Once this is implemented, I can test out the new logic path to see how the functional approximation approach performs.
 
 
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to implement a more significant refactor of the Occurrence_Ratio_Divergence_Match_Score_Tracker module. The goal of this refactor is to be able to use the module to compare multiple different computational approaches for comparing speakers in the comparative_voices_audio_set to the frequency ratio information for the voice_id side-by-side. In practice, this means that instead of having the main output of the module for each speaker <-> voice_id comparison be the match_scores timepoint value list, instead for each speaker <-> voice_id comparison the module will produce a set of multiple timepoint value lists that are each populated using different computational variants. The current match_score calculation will still be kept as one of these variants, but it will be one among multiple others. There is a fair amount of overlap between the logic used by some of the variants. Feel free to separate out cases of such shared logic into mutually callable functions, or to just repeat the logic in each respective variant, whichever is more straightforward and code-readable for each individual case.
+
+To start with, rename the Occurrence_Ratio_Divergence_Match_Score_Tracker module to Element_Match_Contribution_Type_Explorer, and rename the entry-point Run_Occurrence_Ratio_Divergence_Match_Score_Tracking() function to Run_Element_Match_Contribution_Type_Exploration(). 
+
+Next, let's restructure some of the input parameters. Both the hyperparameters and use_bell_curve_percentile_projection input parameters should be removed, and replaced with new parameters called aggregate_match_types and cross_type_hyperparameters. Aggregate_match_types will be a dictionary where each key corresponds to one of the speaker <-> voice_id comparison computational variants. These pointed-to values for these computational variant keys will be sub-dictionaries with two keys, "include_variant" and "hyperparameters". The include_variant key points to a Boolean value that indicates whether or not the variant should be included in the current module run, and the hyperparameters key points to a set of hyperparameters that are specific to that variant. So, for example, for a module run that should include the currently implemented match_score (which should be renamed to "weighted_binary_match_contribution" rather than "match_score") as one of its variants, the weighted_binary_match_contribution sub-dictionary might look like:
+
+"weighted_binary_match_contribution":{
+    "include_variant": True,
+    "hyperparameters": {
+        "positive_contribution_range": 0.5,
+        "positive_weight_power_curve": 0.5,
+        "negative_weight_proximity_half_distance_increment": 1.0
+    }
+}
+
+The cross_type_hyperparameters parameter will be structured the same as the hyperparameters parameter it is replacing, but will only hold hyperparameters that are shared across multiple variants. For now, this means that cross_type_hyperparameters should look like:
+
+"cross_type_hyperparameters":{
+    "use_bell_curve_percentile_projection": True,
+    "occurrence_ratio_cumulation_half_life": 0.2
+} 
+
+Note that all of the former hyperparameters input parameter keys (as well as the use_bell_curve_percentile_projection input parameter) have been relocated to either the hyperparameters sub-dictionary within the weighted_binary_match_contribution variant, or to cross_type_hyperparameters. The actual logic for calculating and populating the timepoint list of weighted_binary_match_contribution values will be the same as the current logic for calculating and populating match_scores. But, now there will be other additional timepoint list options being populated in parallel, and I will describe the logic for each of these next.
+
+The first additional variant option is "occurrence_percentile_deviation". An example of what the occurrence_percentile_deviation sub-dictionary within the aggregate_match_types input parameter should look like is:
+
+"occurrence_percentile_deviation":{
+    "include_variant": True,
+    "hyperparameters": {
+    }
+}
+
+The logic for the occurrence_percentile_deviation timepoint list variant shares a fair amount of the logic used for the weighted_binary_match_contribution variant. All the way through the cumulative_comparative_occurrence_ratios population (currently on line 248), the two variants are effectively identical. At this point, though, the occurrence_percentile_deviation variant replaces the logic for populating match_contribution_weights with logic for populating a variable called occurrence_percentile_deviations that is also structured as a dictionary<freq_center, list<float>>. The logic for calculating the new value to append to occurrence_percentile_deviations for each timepoint for each freq_center is: (1.0 - (absolute_value(0.5 - new_ratio) * 2.0)).
+
+Finally, the occurrence_percentile_deviation variant replaces the logic for calculating a new value to append to match_scores for each timepoint with logic for calculating a new value to append to a variable called average_occurrence_percentile_deviations. The logic for the calculating each timepoint value is just to average all occurrence_percentile_deviations values for the timepoint across all frequency_buckets.
+
+The next variant option is "occurrence_percentile_inverse_deviation", for which an example sub-dictionary structure is:
+
+"occurrence_percentile_inverse_deviation":{
+    "include_variant": True,
+    "hyperparameters": {
+        "deviation_power_curve": 1.0,
+        "inverse_deviation_minimum": -100.0
+    }
+}
+
+The logic for the occurrence_percentile_inverse_deviation variant is identical to that of the occurrence_percentile_deviation variant, except that new variables occurrence_percentile_inverse_deviations and average_occurrence_percentile_inverse_deviations are added. The logic for calculating each new timepoint freq_center value for occurrence_percentile_inverse_deviations is: (-1.0 * (1.0 / (occurrence_percentile_deviations[freq_center][timepoint] ** deviation_power_curve))). If this produces a value below inverse_deviation_minimum, then the new value is set to inverse_deviation_minimum instead. The logic for calculating each timepoint value for average_occurrence_percentile_inverse_deviations is just to average all occurrence_percentile_inverse_deviations values for the timepoint across all frequency_buckets.
+
+The next variant option is "occurrence_percentile_half_distance", for which an example sub-dictionary structure is:
+
+"occurrence_percentile_half_distance":{
+    "include_variant": True,
+    "hyperparameters": {
+        "half_distance_minimum": -10.0
+    }
+}
+
+The logic for the occurrence_percentile_half_distance variant is identical to that of the occurrence_percentile_deviation variant, except that new variables occurrence_percentile_half_distances and average_occurrence_percentile_half_distances are added. The logic for calculating each new timepoint freq_center value for occurrence_percentile_half_distances is: (-1.0 * log_{0.5}((occurrence_percentile_deviations[freq_center][timepoint])). If this produces a value below half_distance_minimum, then the new value is set to half_distance_minimum. The logic for calculating each timepoint value for average_occurrence_percentile_half_distances is just to average all occurrence_percentile_half_distances values for the timepoint across all frequency_buckets.
+
+The final variant option (for now) is raw_distance, for which an example sub-dictionary structure is:
+
+"raw_distance":{
+    "include_variant": True,
+    "hyperparameters": {
+    }
+}
+
+The logic for the raw_distance variant diverges from that of the other variants a bit earlier. Instead of using cumulative_comparative_occurrence_ratios, it instead populates a variable cumulative_raw_distances. Cumulative_raw_distances has new values calculated via the same type of Weighted_Average() function call as used for cumulative_comparative_occurrence_ratios, wherein value_1 is cumulative_raw_distances[freq_center][-1], weight_1 is occurrence_ratio_cumulation_weight, and weight_2 is (1.0 - occurrence_ratio_cumulation_weight). However, its value_2 is calculated as: (-1.0 * absolute_value([frequency_bucket median occurrence_ratio] - timepoint_frequency_ratio)). In case this helpful, note that [frequency_bucket median occurrence_ratio] is the same as the center variable value calculated by the _Extract_Bell_Curve_Projections() function.
+
+Then, the raw_distances variant populates an average_raw_distances list<float> variable, where for each timepoint a value is added which is calculated as just the average of all cumulative_raw_distances values for the timepoint across all frequency_buckets.
+
+Next, we need to refactor the chart generation process to incorporate these new variants (if marked for inclusion by the include_variant flag). This might take some iteration / experimentation, but for now try generating the following two charts per voice_id <-> speaker comparison pairing.
+
+First, generate a chart with one subplot per variant showing the single overall timepoint line graph for that variant. For y-axis minimum / maximum values, the weighted_binary_match_contribution and occurrence_percentile_deviation subplots should each have a minimum of 0 and maximum of 1. The other three variant subplots should have a y-axis maximum of 0, and each should have a y-axis minimum that corresponds to the lowest y-axis value across all voice_id <-> speaker pairings for that variant. So, for example if the lowest average_occurrence_percentile_half_distances value for FCJF0 <-> FCJF0 is -10 and the lowest average_occurrence_percentile_half_distances value for FCJF0 <-> MDAC0 is -20, then both the FCJF0 <-> FCJF0 and FCJF0 <-> MDAC0 plots should have y-axis minimums of -20.
+
+Second, generate a chart with one subplot per variant showing the per-frequency_bucket timepoint line graph for that variant, with the usual color scheme of lower frequency_bucket lines being more purple and higher frequency_bucket lines being more orange. For y-axis minimum / maximum values, the weighted_binary_match_contribution subplot should have a minimum and maximum that are the same distance from 0, with that distance corresponding to the highest absolute-value y-axis value across all frequency_buckets across all voice_id <-> speaker pairings for the weighted_binary_match_contribution variant. The occurrence_percentile_deviation variant subplot should have a minimum of 0 and maximum of 1. The other three variant subplots should have a maximum of 0, and a minimum that corresponds to the lowest y-axis value across all frequency_buckets across all voice_id <-> speaker pairings for that variant.
+
+Finally, generate a single chart with one subplot per variant that overlays all voice_id <-> speaker overall timepoint line graphs for that variant, with the voice_id <-> self line twice as thick as the others to make it stand out. As you pointed out before, this will result in different x-axis lengths for each line. The y-axis minimums and maximums for each variant subplot should be the same as they are for the first voice_id <-> speaker pairing chart.
+
+Once this refactor is done, I can do some test runs to see what the expanded analysis and charts look like.
+
 
 

@@ -127,40 +127,40 @@ Audio files are processed in order via `Process_Audio()`. Valid timepoints (pass
 - `Convert_Half_Life_To_Cumulation_Weight(processing_window_duration, half_life)` — exponential decay weight.
 - `Weighted_Average(value_1, weight_1, value_2, weight_2)` — scalar weighted average.
 
-### 8. `Occurrence_Ratio_Divergence_Match_Score_Tracker.py`
-For each comparative speaker, tracks how well their per-bucket frequency ratios match the reference voice's statistical distribution over time, producing a single scalar match score per voiced timepoint.
+### 8. `Element_Match_Contribution_Type_Explorer.py`
+Compares multiple computational approaches for scoring how well a comparative speaker's frequency ratios match a reference voice's statistical distribution, running all selected variants in parallel and generating charts for side-by-side comparison. Replaces the former `Occurrence_Ratio_Divergence_Match_Score_Tracker`.
 
-**Entry point:** `Run_Occurrence_Ratio_Divergence_Match_Score_Tracking(voice_id, comparative_voices_audio_set, hyperparameters, use_bell_curve_percentile_projection=False)`
+**Entry point:** `Run_Element_Match_Contribution_Type_Exploration(voice_id, comparative_voices_audio_set, aggregate_match_types, cross_type_hyperparameters)`
 
-- `voice_id`: reference speaker whose JSON is loaded and converted to inverted occurrence ratios (each value `v` replaced by `1 - v`). The inverted form maps frequency ratios to their "how unusual for this speaker" percentile — high ratio = unusual = value near 1.
+- `voice_id`: reference speaker whose JSON is loaded and converted to inverted occurrence ratios.
 - `comparative_voices_audio_set`: `dict[str, list[str]]` — same format as other modules.
-- `hyperparameters`: `dict[str, float]` with keys:
-  - `occurrence_ratio_cumulation_half_life` → converted to `occurrence_ratio_cumulation_weight` (stored back) via `Convert_Half_Life_To_Cumulation_Weight`.
-  - `positive_contribution_range` (0–1): width of the "matched" zone centered on 0.5 in cumulative ratio space.
-  - `positive_weight_power_curve`: exponent shaping how quickly positive weight decays away from 0.5.
-  - `negative_weight_proximity_half_distance_increment`: scales negative-zone weight (logarithmic, based on distance to the contribution boundary).
-- `use_bell_curve_percentile_projection`: if `True`, replaces the per-timepoint inverted-ratio lookup with a Gaussian z-score approximation (see below). Default `False`.
+- `aggregate_match_types`: `dict[str, dict]` — one entry per variant. Each value has:
+  - `"include_variant"`: bool — whether to run this variant in the current execution.
+  - `"hyperparameters"`: dict of variant-specific parameters (see variants below).
+- `cross_type_hyperparameters`: parameters shared across all variants:
+  - `"occurrence_ratio_cumulation_half_life"`: float — converted to per-timepoint exponential decay weight.
+  - `"use_bell_curve_percentile_projection"`: bool — if `True`, uses the Gaussian z-score approximation to compute `value_2` (same bell-curve logic as the former module); if `False`, uses direct bisect-based lookup into the inverted occurrence ratios.
 
-**Per-speaker processing:**
+**Shared per-timepoint computation:**
 
-Three structures are initialized per speaker: `cumulative_comparative_occurrence_ratios` (`{freq: [0.5]}`), `match_contribution_weights` (`{freq: [0.0]}`), and `match_scores` (`[0.5]`).
+For variants that use `cumulative_comparative_occurrence_ratios` (all except `raw_distance`), `value_2` is computed once per bucket per timepoint (lookup or bell-curve path) and the cumulative ratio is updated via `Weighted_Average`. All speakers are fully processed before any charts are generated, so global y-axis bounds can be computed.
 
-For each valid voiced timepoint (same two skip conditions as other modules), for each frequency bucket:
-1. `value_2` is computed via one of two paths:
-   - **Lookup path** (`use_bell_curve_percentile_projection=False`): finds the key in `voice_id`'s inverted occurrence ratios closest to `timepoint_frequency_ratio` via bisect-based O(log n) lookup. Converts the comparative speaker's ratio directly into its percentile in the reference distribution.
-   - **Bell curve projection path** (`use_bell_curve_percentile_projection=True`): uses a per-bucket Gaussian approximation extracted once before the speaker loop. For each bucket, three values are derived from the inverted occurrence ratios: `projected_bell_curve_center` (key at inverted ratio ≈ 0.5, the median), `projected_lower_standard_deviation` (= center − key at inverted ratio ≈ 0.15865, the left-side std estimate), and `projected_upper_standard_deviation` (= key at inverted ratio ≈ 0.84135 − center, the right-side std estimate). `value_2` is then `0.5 * (1 + erf(z / √2))` where `z = (timepoint_frequency_ratio − center) / std`, with std chosen by which side of center the ratio falls on. The inverted occurrence ratios are released from memory after extraction.
-2. New `cumulative_comparative_occurrence_ratio` is the exponential weighted average of the previous value (`weight = cumulation_weight`) and `value_2` (`weight = 1 - cumulation_weight`).
-3. New `match_contribution_weight`:
-   - **Positive zone** (`lower ≤ ratio ≤ upper`, where `lower/upper = 0.5 ± positive_contribution_range/2`): `(1 - |ratio - 0.5| / (0.5 * pcr)) ^ power_curve`. Peaks at 1.0 when ratio = 0.5, falls to 0 at the boundaries.
-   - **Negative zone**: logarithmically scaled via `log_0.5(proximity / boundary_distance) * increment`. Grows as ratio approaches 0 or 1.
-4. Per-timepoint `match_score` = weighted average of all per-bucket match contribution values (1.0 if bucket is in positive zone, else 0.0), weighted by their `match_contribution_weights`.
+**Variants:**
 
-**Output charts:**
-- Per-speaker 3-subplot PNG (`{run_name}_voice_match_score_progression_{voice_id}_{speaker_id}.png`):
-  - Subplot 1: `match_scores` line, y ∈ [0, 1], speaker color.
-  - Subplot 2: `cumulative_comparative_occurrence_ratios` lines, y ∈ [0, 1], purple→orange gradient by frequency.
-  - Subplot 3: transformed `match_contribution_weights`, y ∈ [-(1+max_weight), 1+max_weight]. Values are sign-and-scale transformed so that 0 = perfect match, ±1 = contribution boundary, beyond ±1 = negative contribution territory.
-- Combined 1-subplot PNG (`{run_name}_voice_match_scores_{voice_id}.png`): all speakers' `match_scores` overlaid, each in their persistent speaker color.
+- **`weighted_binary_match_contribution`** — the original match-score logic. Hyperparameters: `positive_contribution_range`, `positive_weight_power_curve`, `negative_weight_proximity_half_distance_increment`. Per-bucket: unsigned `match_contribution_weights`. Overall per-timepoint: fraction of total weight falling in the positive zone `[0.5 ± pcr/2]`. Range [0, 1].
+
+- **`occurrence_percentile_deviation`** — `1.0 - |0.5 - ratio| * 2.0`. No hyperparameters. Range [0, 1]; value is 1 when ratio = 0.5 and 0 when ratio = 0 or 1. Overall per-timepoint: average across buckets.
+
+- **`occurrence_percentile_inverse_deviation`** — `(-1.0 / (deviation ^ power_curve)) + 1.0`, clamped at `inverse_deviation_minimum`. Hyperparameters: `deviation_power_curve`, `inverse_deviation_minimum`. Value is 0 at perfect match (deviation = 1) and grows more negative as deviation falls. Overall per-timepoint: average across buckets.
+
+- **`occurrence_percentile_half_distance`** — `-log_{0.5}(deviation)`, clamped at `half_distance_minimum`. Hyperparameters: `half_distance_minimum`. Value is 0 at perfect match and grows more negative as deviation falls. Overall per-timepoint: average across buckets.
+
+- **`raw_distance`** — uses `cumulative_raw_distances` instead of `cumulative_comparative_occurrence_ratios`. `value_2 = -|median - timepoint_frequency_ratio|` where median is the per-bucket frequency ratio key with inverted occurrence ratio closest to 0.5. No hyperparameters. Always ≤ 0. Overall per-timepoint: average across buckets.
+
+**Output charts (three per run):**
+- **Per-speaker overall** (`{run_name}_element_match_overall_{voice_id}_{speaker_id}.png`): one subplot per included variant, single overall timepoint line in speaker color. `weighted_binary_match_contribution` and `occurrence_percentile_deviation` subplots use y ∈ [0, 1]. The other three use y ∈ [global_min, 0], where global_min is the lowest value observed across all speakers for that variant.
+- **Per-speaker per-bucket** (`{run_name}_element_match_per_bucket_{voice_id}_{speaker_id}.png`): one subplot per included variant, one line per frequency bucket (purple→orange gradient). `weighted_binary_match_contribution` subplot shows signed weights (positive in positive zone, negative in negative zone) with symmetric y-axis `[-global_abs_max, global_abs_max]`. `occurrence_percentile_deviation` subplot uses y ∈ [0, 1]. The other three use y ∈ [global_min, 0].
+- **Combined** (`{run_name}_element_match_combined_{voice_id}.png`): one subplot per included variant, all speakers' overall lines overlaid; `voice_id`'s own line is drawn at 1.5× thickness. Y-axis bounds match the per-speaker overall chart.
 
 **`Subdistribution_Extractor.py` change:** `Convert_Occurrence_Counts_To_Ratios` gained an `invert=False` parameter. When `True`, each ratio `v` is stored as `1 - v`. All existing callers use the default and are unaffected.
 
@@ -254,9 +254,10 @@ Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (layered subd
 Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (deviation tracking):
 - `{run_name}_voice_comparative_progression_{voice_id}_{speaker_id}_{occurrence_ratio_threshold}.png` (one per comparative speaker)
 
-Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (match score tracking):
-- `{run_name}_voice_match_score_progression_{voice_id}_{speaker_id}.png` (one per comparative speaker)
-- `{run_name}_voice_match_scores_{voice_id}.png` (combined all-speakers chart)
+Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (element match type exploration):
+- `{run_name}_element_match_overall_{voice_id}_{speaker_id}.png` (one per comparative speaker)
+- `{run_name}_element_match_per_bucket_{voice_id}_{speaker_id}.png` (one per comparative speaker)
+- `{run_name}_element_match_combined_{voice_id}.png` (combined all-speakers chart)
 
 Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (percentile shape visualizer):
 - `{run_name}_occurrence_ratio_percentile_shapes_{voice_id}.png` (one per voice_id)
