@@ -422,4 +422,45 @@ Finally, generate a single chart with one subplot per variant that overlays all 
 Once this refactor is done, I can do some test runs to see what the expanded analysis and charts look like.
 
 
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to implement a change to the logic in the Subdistribution_Extractor module. As a bit of context, the goal / purpose of this change is to add an optional cumulative recency weight to the frequency_ratio values calculated for frequency_amount_occurrence_counts, in order to make them more directly comparable to the similarly cumulative-recency-weighted distribution_ratios used by recent modules like the Occurrence_Ratio_Divergence_Match_Score_Tracker. Currently, the Occurrence_Ratio_Divergence_Match_Score_Tracker allows for this adjustable recency weighting while frequency_amount_occurrence_counts that it loads for reference does not. This effectively means that the Occurrence_Ratio_Divergence_Match_Score_Tracker is mapping runtime distribution_ratios that are calculated using a recency_weight to loaded voice_id occurrence_ratios that were populated without a recency weight, which may (or may not, part of the goal of this is to find out) distort the resulting similarity computations. 
+
+The logic change itself should be relatively small, but since the Accumulate_Frequency_Occurrence_Counts() is used directly and indirectly by several downstream modules there may be updates needed across some of those modules to keep them compatible with the changes. Because of the potential broad reach of these changes, definitely let me know if any of my instructions needs clarification or seem like they may introduce problems. Also feel free to deviate from the exact instructions if you see alternatives that seem more effective / elegant / maintainable / etcetera.
+
+Okay, to start, the json files used to save and load frequency_amount_occurrence_counts should be extended to store an additional value corresponding to each frequency_bucket called current_cumulative_frequency_ratio. The logic for setting / updating / using a frequency_bucket's current_cumulative_frequency_ratio is described shortly.
+
+Next, add a new optional parameter to the Accumulate_Frequency_Occurrence_Counts() function called frequency_ratio_cumulation_weight, which is by default set to 0.0. Then, update the logic for the initial setting of timepoint_frequency_ratio (currently on line 31). Rather than setting timepoint_frequency_ratio directly to bucketed_frequency_distribution_progression[voiced_frequency_index][timepoint_index], instead first calculate an updated value for the current_cumulative_frequency_ratio of the current frequency_bucket (where frequency_bucket corresponds to voiced_frequency_index) using logic as described below.
+    2) If frequency_ratio_cumulation_weight is 0, or if current_cumulative_frequency_ratio is not yet set for the current frequency_bucket, then current_cumulative_frequency_ratio is set to bucketed_frequency_distribution_progression[voiced_frequency_index][timepoint_index].
+    3) Else, use the Weighted_Average() function in Voice_Subdistribution_Deviation_Tracker to calculate an updated current_cumulative_frequency_ratio value, with input values to the function being:
+        1) value_1 is current current_cumulative_frequency_ratio value for the frequency_bucket.
+        2) value_2 is bucketed_frequency_distribution_progression[voiced_frequency_index][timepoint_index]
+        3) weight_1 is frequency_ratio_cumulation_weight
+        4) weight_2 is (1.0 - frequency_ratio_cumulation_weight)
+    4) Then set timepoint_frequency_ratio to this updated current_cumulative_frequency_ratio value, after which the rest of Accumulate_Frequency_Occurrence_Counts() logic should remain the same as it is currently.
+
+Next, the calls to Accumulate_Frequency_Occurrence_Counts() from Layered_Occurrence_Count_Populator should be updated. To start, update the Run_Layered_Occurrence_Count_Population() and Run_Subtractive_Layered_Occurrence_Count_Population() functions to each take an additional optional parameter called frequency_ratio_cumulation_half_life, which is by default set to null. frequency_ratio_cumulation_half_life is then immediately converted to frequency_ratio_cumulation_weight by calling Convert_Half_Life_To_Cumulation_Weight() in Voice_Subdistribution_Deviation_Tracker, unless frequency_ratio_cumulation_half_life is null in which case frequency_ratio_cumulation_weight is set to 0. Frequency_ratio_cumulation_weight is then used in all calls to Accumulate_Frequency_Occurrence_Counts().
+
+Layered_Occurrence_Count_Populator will also need some changes around saving and loading frequency_amount_occurrence_counts json files. Because different frequency_ratio_cumulation_half_life settings will result in different frequency_ratio calculations over the same audio, there should be a distinct set of frequency_amount_occurrence_counts json files for each frequency_ratio_cumulation_half_life setting used. For now, keep the names of the json files when running with a null frequency_ratio_cumulation_half_life value the same as they are currently, and whenever a frequency_ratio_cumulation_half_life value is set add the half_life to the end of the file name with some replacement character for the "." in half_life settings with a decimal to prevent file extension issues.
+
+Next, the Element_Match_Contribution_Type_Explorer module. Update the cross_type_hyperparameters input parameter of Run_Element_Match_Contribution_Type_Exploration() with a new hyperparameter "voice_profile_cumulation_half_life". This hyperparameter should be used to load the half_life-corresponding frequency_amount_occurrence_counts speaker json file, including potentially the no-half_life json file if voice_profile_cumulation_half_life is set to null.
+
+Finally, the Occurrence_Ratio_Percentile_Shape_Visualizer module. Add a new voice_profile_cumulation_half_life input parameter to Visualize_Occurrence_Ratio_Percentile_Shapes(). This parameter should be used to load the half_life-corresponding frequency_amount_occurrence_counts speaker json file, including potentially the no-half_life json file if voice_profile_cumulation_half_life is set to null.
+
+I think that should cover everything for this update, but like I said the cascade of things impacted by changing the frequency_amount_occurrence_counts json files is pretty broad so let me know if I have missed or failed to account for anything.
+
+--------------------------
+
+Okay great thanks, a few comments / responses:
+    1) Leaving out the Voice_Subdistribution_Deviation_Tracker update is fine, that module is effectively replaced by Element_Match_Contribution_Type_Explorer so probably will not be used again. We might deprecate it soon.
+    2) Under the current string formatting of half_life in the json file name that replaces "." with "", wouldn't that in effect mean that half_lifes of, for example, ".12" and "1.2" would end up with the same name? If so, that should be changed to something that replaces rather than removes the ".", like a lower-case "o".
+    3) To resolve the circular imports issue with the Convert_Half_Life_To_Cumulation_Weight() and Weighted_Average() functions, please move these functions to a new dedicated file called Global_Helper_Functions, and then move all references (including changing the inline formula in Layered_Occurrence_Count_Populator.py to a reference) accordingly. The current housing of those functions in Voice_Subdistribution_Deviation_Tracker does not make much sense, since those are general commonly used helper functions for these analyses that do not have any specific relation to Voice_Subdistribution_Deviation_Tracker.
+
+
+
+
+
+
+
 
