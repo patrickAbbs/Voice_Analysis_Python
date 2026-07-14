@@ -12,7 +12,7 @@ from Subdistribution_Extractor import Convert_Occurrence_Counts_To_Ratios
 from Layered_Occurrence_Count_Populator import Process_Audio
 from Layered_Subdistribution_Generator import Load_Layered_State, Get_Voiced_Frequency_Bucket_Centers
 from Color_Assignment_Manager import Get_Speaker_Color
-from Voice_Subdistribution_Deviation_Tracker import Convert_Half_Life_To_Cumulation_Weight, Weighted_Average
+from Global_Helper_Functions import Convert_Half_Life_To_Cumulation_Weight, Weighted_Average
 
 
 # --- internal helpers ---

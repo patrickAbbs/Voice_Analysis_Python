@@ -1,5 +1,4 @@
 import numpy
-import math
 import matplotlib.pyplot as pyplot
 
 from Global_Hyperparameters import (
@@ -10,17 +9,7 @@ from Global_Hyperparameters import (
 from Subdistribution_Extractor import Convert_Occurrence_Counts_To_Ratios, Subdistribution_Tier
 from Layered_Occurrence_Count_Populator import Process_Audio
 from Layered_Subdistribution_Generator import Load_Layered_State, Get_Voiced_Frequency_Bucket_Centers
-
-
-# --- helpers ---
-
-def Convert_Half_Life_To_Cumulation_Weight(processing_window_duration, half_life):
-    processing_window_to_halflife_duration = processing_window_duration / half_life
-    return math.pow(0.5, processing_window_to_halflife_duration)
-
-
-def Weighted_Average(value_1, weight_1, value_2, weight_2):
-    return (value_1 * weight_1 + value_2 * weight_2) / (weight_1 + weight_2)
+from Global_Helper_Functions import Convert_Half_Life_To_Cumulation_Weight, Weighted_Average
 
 
 # --- chart ---

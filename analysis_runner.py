@@ -23,7 +23,17 @@ Layered_Subdistribution_Audio_Set = {
     "MDAC0": ["SA1", "SA2", "SI631", "SI1261", "SI1837", "SX91", "SX181", "SX271", "SX361", "SX451"],
     "FECD0": ["SA1", "SA2", "SI788", "SI1418", "SI2048", "SX68", "SX158", "SX248", "SX338", "SX428"],
     "MDPK0": ["SA1", "SA2", "SI552", "SI1053", "SI1683", "SX63", "SX153", "SX243", "SX333", "SX423"],
+    #"FJSP0": ["SA1", "SA2", "SI804", "SI1434", "SI1763", "SX84", "SX174", "SX264"],
+    #"MGRL0": ["SA1", "SA2", "SI867", "SI1497", "SI2127", "SX57", "SX147", "SX237"]
+    "FJSP0": ["SA1", "SA2", "SI804", "SI1434", "SI1763", "SX84", "SX174", "SX264", "SX354", "SX444"],
+    "MGRL0": ["SA1", "SA2", "SI867", "SI1497", "SI2127", "SX57", "SX147", "SX237", "SX327", "SX417"]
     }
+
+New_Partial_Speaker_Audio_Set = {
+    "FJSP0": ["SA1", "SA2", "SI804", "SI1434", "SI1763", "SX84", "SX174", "SX264"],
+    "MGRL0": ["SA1", "SA2", "SI867", "SI1497", "SI2127", "SX57", "SX147", "SX237"]
+}
+
 
 #Layered_Subdistribution_Audio_Set = {"FCJF0": ["SA1", "SI648"], "MEDR0": ["SA1", "SI1374"]}
 Subdistribution_Layer = "voice"
@@ -49,9 +59,11 @@ def Run_Analysis():
     all_audios_analysis_data = Analyze_Subdistribution_Differences(all_audios_analysis_data)
 
 def Run_Subdstributions():
-    Run_Layered_Occurrence_Count_Population(Layered_Subdistribution_Audio_Set, Subdistribution_Layer)
+    #Run_Layered_Occurrence_Count_Population(Layered_Subdistribution_Audio_Set, Subdistribution_Layer)
+    #Run_Layered_Occurrence_Count_Population(New_Partial_Speaker_Audio_Set, Subdistribution_Layer)
+    Run_Layered_Occurrence_Count_Population(Layered_Subdistribution_Audio_Set, Subdistribution_Layer, frequency_ratio_cumulation_half_life = 0.2)
     #Run_Layered_Subdistribution_Generation(Subdistribution_Layer)
-    Run_Layered_Subdistribution_Generation("voice", voice_set=["FCJF0", "MEDR0", "MCPM0", "FDAW0", "FDML0", "MDAC0", "FECD0", "MDPK0"], allow_negative_subtractive_subdistributions=True, generate_original_subdistribution_charts=True, generate_subtractive_subdistribution_charts=False)
+    #Run_Layered_Subdistribution_Generation("voice", voice_set=["FCJF0", "MEDR0", "MCPM0", "FDAW0", "FDML0", "MDAC0", "FECD0", "MDPK0"], allow_negative_subtractive_subdistributions=True, generate_original_subdistribution_charts=True, generate_subtractive_subdistribution_charts=False)
     #Run_Layered_Subdistribution_Generation("phoneme", phoneme_set=["ae", "ay", "ix", "iy"], allow_negative_subtractive_subdistributions=True, generate_original_subdistribution_charts=True, generate_subtractive_subdistribution_charts=True)
 
 def Run_Subtractive_Subdstributions():
@@ -98,13 +110,15 @@ def Run_Element_Match_Contribution_Type_Analysis():
         },
         cross_type_hyperparameters={
             "use_bell_curve_percentile_projection": True,
-            "occurrence_ratio_cumulation_half_life": 0.2
+            "occurrence_ratio_cumulation_half_life": 0.2,
+            "voice_profile_cumulation_half_life": 0.2
         }
     )
 
 def Run_Visualize_Occurrence_Ratio_Percentile_Shapes():
     #Visualize_Occurrence_Ratio_Percentile_Shapes(["FCJF0", "MEDR0"], proximity_density_distance=0.001)
-    Visualize_Occurrence_Ratio_Percentile_Shapes(["FCJF0", "MEDR0", "MCPM0", "FDAW0", "FDML0", "MDAC0", "FECD0", "MDPK0"], proximity_density_distance=0.0008)
+    Visualize_Occurrence_Ratio_Percentile_Shapes(["FCJF0", "MEDR0", "MCPM0", "FDAW0", "FDML0", "MDAC0", "FECD0", "MDPK0"], 
+                                                 proximity_density_distance=0.0008, voice_profile_cumulation_half_life=0.2)
 
 #Run_Analysis()
 #Run_Subdstributions()

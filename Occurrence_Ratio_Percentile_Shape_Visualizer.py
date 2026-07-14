@@ -3,6 +3,7 @@ import matplotlib.pyplot as pyplot
 
 from Global_Hyperparameters import Analysis_Directory, Analysis_Run_Name, Chart_Image_Resolution, Json_Directory
 from Layered_Subdistribution_Generator import Load_Layered_State, Get_Voiced_Frequency_Bucket_Centers
+from Layered_Occurrence_Count_Populator import Format_Half_Life_For_Filename
 
 
 def _Reconstruct_Sorted_Frequency_Ratios(bucket_counts):
@@ -29,9 +30,10 @@ def _Freq_Colors(n):
     ]
 
 
-def Visualize_Occurrence_Ratio_Percentile_Shapes(voice_ids, proximity_density_distance=0.001):
+def Visualize_Occurrence_Ratio_Percentile_Shapes(voice_ids, proximity_density_distance=0.001, voice_profile_cumulation_half_life=None):
+    half_life_suffix = Format_Half_Life_For_Filename(voice_profile_cumulation_half_life)
     for voice_id in voice_ids:
-        state_path = Json_Directory + f"Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts.json"
+        state_path = Json_Directory + f"Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts{half_life_suffix}.json"
         state = Load_Layered_State(state_path)
         if state is None:
             print(f"Occurrence_Ratio_Percentile_Shape_Visualizer: no data found for '{voice_id}', skipping")

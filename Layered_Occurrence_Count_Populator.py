@@ -2,6 +2,7 @@ import json
 import os
 
 from Global_Hyperparameters import Distribution_Types, Spectrogram_Window_Jump_In_Seconds, Json_Directory
+from Global_Helper_Functions import Convert_Half_Life_To_Cumulation_Weight
 from Spectrogram_Generator import Generate_Audio_Spectrogram
 from Frequency_Distribution_Generator import Generate_Frequency_Bucket_Centers, Generate_Typed_Bucketed_Frequency_Progressions, Generate_Typed_Bucketed_Frequency_Distributions
 from Subdistribution_Extractor import Accumulate_Frequency_Occurrence_Counts, Convert_Occurrence_Counts_To_Ratios, Extract_Frequency_Subdistributions
@@ -20,30 +21,35 @@ VOICED_PHONEMES_SET = set(VOICED_PHONEMES)
 
 # --- path helpers ---
 
-def Get_Universal_State_Path():
-    return Json_Directory + "Universal_Frequency_Amount_Occurrence_Counts.json"
+def Format_Half_Life_For_Filename(half_life):
+    if half_life is None:
+        return ""
+    return "_" + str(half_life).replace(".", "o")
 
-def Get_Speaker_State_Path(speaker_id):
-    return Json_Directory + f"Speaker_{speaker_id}_Frequency_Amount_Occurrence_Counts.json"
+def Get_Universal_State_Path(half_life=None):
+    return Json_Directory + "Universal_Frequency_Amount_Occurrence_Counts" + Format_Half_Life_For_Filename(half_life) + ".json"
 
-def Get_Phoneme_State_Path(phoneme):
-    return Json_Directory + f"Phoneme_{phoneme}_Frequency_Amount_Occurrence_Counts.json"
+def Get_Speaker_State_Path(speaker_id, half_life=None):
+    return Json_Directory + f"Speaker_{speaker_id}_Frequency_Amount_Occurrence_Counts" + Format_Half_Life_For_Filename(half_life) + ".json"
+
+def Get_Phoneme_State_Path(phoneme, half_life=None):
+    return Json_Directory + f"Phoneme_{phoneme}_Frequency_Amount_Occurrence_Counts" + Format_Half_Life_For_Filename(half_life) + ".json"
 
 def Format_Tier_For_Filename(tier):
     return str(tier).replace(".", "")
 
-def Get_Subtractive_Speaker_State_Path(speaker_id, tier):
-    return Json_Directory + f"Speaker_{speaker_id}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
+def Get_Subtractive_Speaker_State_Path(speaker_id, tier, half_life=None):
+    return Json_Directory + f"Speaker_{speaker_id}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}" + Format_Half_Life_For_Filename(half_life) + ".json"
 
-def Get_Subtractive_Phoneme_State_Path(phoneme, tier):
-    return Json_Directory + f"Phoneme_{phoneme}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}.json"
+def Get_Subtractive_Phoneme_State_Path(phoneme, tier, half_life=None):
+    return Json_Directory + f"Phoneme_{phoneme}_Subtractive_Frequency_Amount_Occurrence_Counts_{Format_Tier_For_Filename(tier)}" + Format_Half_Life_For_Filename(half_life) + ".json"
 
 
 # --- state persistence ---
 
 def Load_State(path):
     if not os.path.exists(path):
-        return {"processed_audios": {}, "total_voiced_frequency_timepoints_count": 0.0, "frequency_amount_occurrence_counts": None, "frequency_bucket_centers": None}
+        return {"processed_audios": {}, "total_voiced_frequency_timepoints_count": 0.0, "frequency_amount_occurrence_counts": None, "frequency_bucket_centers": None, "current_cumulative_frequency_ratios": None}
     with open(path, "r") as f:
         raw = json.load(f)
     raw_counts = raw.get("frequency_amount_occurrence_counts")
@@ -52,7 +58,8 @@ def Load_State(path):
         "processed_audios": raw["processed_audios"],
         "total_voiced_frequency_timepoints_count": float(raw["total_voiced_frequency_timepoints_count"]),
         "frequency_amount_occurrence_counts": frequency_amount_occurrence_counts,
-        "frequency_bucket_centers": raw.get("frequency_bucket_centers")
+        "frequency_bucket_centers": raw.get("frequency_bucket_centers"),
+        "current_cumulative_frequency_ratios": raw.get("current_cumulative_frequency_ratios")
     }
 
 
@@ -65,7 +72,8 @@ def Save_State(path, state):
             "processed_audios": state["processed_audios"],
             "total_voiced_frequency_timepoints_count": state["total_voiced_frequency_timepoints_count"],
             "frequency_amount_occurrence_counts": serializable_counts,
-            "frequency_bucket_centers": state.get("frequency_bucket_centers")
+            "frequency_bucket_centers": state.get("frequency_bucket_centers"),
+            "current_cumulative_frequency_ratios": state.get("current_cumulative_frequency_ratios")
         }, f, indent=2)
 
 
@@ -127,8 +135,8 @@ def Process_Audio(speaker_id, audio_name):
 
 # --- analysis runners ---
 
-def Run_Universal_Analysis(speaker_audio_dict):
-    state = Load_State(Get_Universal_State_Path())
+def Run_Universal_Analysis(speaker_audio_dict, frequency_ratio_cumulation_weight, half_life):
+    state = Load_State(Get_Universal_State_Path(half_life))
 
     for speaker_id, audio_names in speaker_audio_dict.items():
         for audio_name in audio_names:
@@ -142,23 +150,26 @@ def Run_Universal_Analysis(speaker_audio_dict):
             if state["frequency_bucket_centers"] is None:
                 state["frequency_bucket_centers"] = frequency_bucket_centers
 
-            updated_counts, updated_timepoints_count = Accumulate_Frequency_Occurrence_Counts(
+            updated_counts, updated_timepoints_count, updated_cumulative_ratios = Accumulate_Frequency_Occurrence_Counts(
                 distribution, frequency_bucket_centers,
                 state["frequency_amount_occurrence_counts"],
                 state["total_voiced_frequency_timepoints_count"],
-                timepoint_mask
+                timepoint_mask,
+                frequency_ratio_cumulation_weight=frequency_ratio_cumulation_weight,
+                existing_cumulative_ratios=state["current_cumulative_frequency_ratios"]
             )
             state["frequency_amount_occurrence_counts"] = updated_counts
             state["total_voiced_frequency_timepoints_count"] = updated_timepoints_count
+            state["current_cumulative_frequency_ratios"] = updated_cumulative_ratios
             Mark_Processed(state, speaker_id, audio_name)
-            Save_State(Get_Universal_State_Path(), state)
+            Save_State(Get_Universal_State_Path(half_life), state)
             print(f"Layered_Occurrence_Count_Populator: '{speaker_id}/{audio_name}' complete — total voiced timepoints: {int(state['total_voiced_frequency_timepoints_count'])}")
 
     print("Layered_Occurrence_Count_Populator: universal run complete")
 
 
-def Run_Voice_Analysis(speaker_audio_dict):
-    speaker_states = {speaker_id: Load_State(Get_Speaker_State_Path(speaker_id)) for speaker_id in speaker_audio_dict}
+def Run_Voice_Analysis(speaker_audio_dict, frequency_ratio_cumulation_weight, half_life):
+    speaker_states = {speaker_id: Load_State(Get_Speaker_State_Path(speaker_id, half_life)) for speaker_id in speaker_audio_dict}
 
     for speaker_id, audio_names in speaker_audio_dict.items():
         state = speaker_states[speaker_id]
@@ -173,23 +184,26 @@ def Run_Voice_Analysis(speaker_audio_dict):
             if state["frequency_bucket_centers"] is None:
                 state["frequency_bucket_centers"] = frequency_bucket_centers
 
-            updated_counts, updated_timepoints_count = Accumulate_Frequency_Occurrence_Counts(
+            updated_counts, updated_timepoints_count, updated_cumulative_ratios = Accumulate_Frequency_Occurrence_Counts(
                 distribution, frequency_bucket_centers,
                 state["frequency_amount_occurrence_counts"],
                 state["total_voiced_frequency_timepoints_count"],
-                timepoint_mask
+                timepoint_mask,
+                frequency_ratio_cumulation_weight=frequency_ratio_cumulation_weight,
+                existing_cumulative_ratios=state["current_cumulative_frequency_ratios"]
             )
             state["frequency_amount_occurrence_counts"] = updated_counts
             state["total_voiced_frequency_timepoints_count"] = updated_timepoints_count
+            state["current_cumulative_frequency_ratios"] = updated_cumulative_ratios
             Mark_Processed(state, speaker_id, audio_name)
-            Save_State(Get_Speaker_State_Path(speaker_id), state)
+            Save_State(Get_Speaker_State_Path(speaker_id, half_life), state)
             print(f"Layered_Occurrence_Count_Populator: '{speaker_id}/{audio_name}' complete — '{speaker_id}' voiced timepoints: {int(state['total_voiced_frequency_timepoints_count'])}")
 
     print("Layered_Occurrence_Count_Populator: voice run complete")
 
 
-def Run_Phoneme_Analysis(speaker_audio_dict):
-    phoneme_states = {phoneme: Load_State(Get_Phoneme_State_Path(phoneme)) for phoneme in VOICED_PHONEMES}
+def Run_Phoneme_Analysis(speaker_audio_dict, frequency_ratio_cumulation_weight, half_life):
+    phoneme_states = {phoneme: Load_State(Get_Phoneme_State_Path(phoneme, half_life)) for phoneme in VOICED_PHONEMES}
 
     for speaker_id, audio_names in speaker_audio_dict.items():
         for audio_name in audio_names:
@@ -208,18 +222,21 @@ def Run_Phoneme_Analysis(speaker_audio_dict):
                 if not any(phoneme_mask):
                     continue
                 state = phoneme_states[phoneme]
-                updated_counts, updated_timepoints_count = Accumulate_Frequency_Occurrence_Counts(
+                updated_counts, updated_timepoints_count, updated_cumulative_ratios = Accumulate_Frequency_Occurrence_Counts(
                     distribution, frequency_bucket_centers,
                     state["frequency_amount_occurrence_counts"],
                     state["total_voiced_frequency_timepoints_count"],
-                    phoneme_mask
+                    phoneme_mask,
+                    frequency_ratio_cumulation_weight=frequency_ratio_cumulation_weight,
+                    existing_cumulative_ratios=state["current_cumulative_frequency_ratios"]
                 )
                 state["frequency_amount_occurrence_counts"] = updated_counts
                 state["total_voiced_frequency_timepoints_count"] = updated_timepoints_count
+                state["current_cumulative_frequency_ratios"] = updated_cumulative_ratios
 
             for phoneme, state in phoneme_states.items():
                 Mark_Processed(state, speaker_id, audio_name)
-                Save_State(Get_Phoneme_State_Path(phoneme), state)
+                Save_State(Get_Phoneme_State_Path(phoneme, half_life), state)
 
             print(f"Layered_Occurrence_Count_Populator: '{speaker_id}/{audio_name}' complete")
 
@@ -228,13 +245,14 @@ def Run_Phoneme_Analysis(speaker_audio_dict):
 
 # --- entry point ---
 
-def Run_Layered_Occurrence_Count_Population(speaker_audio_dict, subdistribution_layer):
+def Run_Layered_Occurrence_Count_Population(speaker_audio_dict, subdistribution_layer, frequency_ratio_cumulation_half_life=None):
+    frequency_ratio_cumulation_weight = 0.0 if frequency_ratio_cumulation_half_life is None else Convert_Half_Life_To_Cumulation_Weight(Spectrogram_Window_Jump_In_Seconds, frequency_ratio_cumulation_half_life)
     if subdistribution_layer == "universal":
-        Run_Universal_Analysis(speaker_audio_dict)
+        Run_Universal_Analysis(speaker_audio_dict, frequency_ratio_cumulation_weight, frequency_ratio_cumulation_half_life)
     elif subdistribution_layer == "voice":
-        Run_Voice_Analysis(speaker_audio_dict)
+        Run_Voice_Analysis(speaker_audio_dict, frequency_ratio_cumulation_weight, frequency_ratio_cumulation_half_life)
     elif subdistribution_layer == "phoneme":
-        Run_Phoneme_Analysis(speaker_audio_dict)
+        Run_Phoneme_Analysis(speaker_audio_dict, frequency_ratio_cumulation_weight, frequency_ratio_cumulation_half_life)
     else:
         print(f"WARNING: Layered_Occurrence_Count_Populator: unrecognized subdistribution_layer '{subdistribution_layer}'")
 
@@ -250,15 +268,15 @@ def Get_Subdistribution_Offsets_From_State(state, tier):
     return matching.Subdistribution
 
 
-def Get_Universal_Subdistribution_Offsets(tier):
-    state = Load_State(Get_Universal_State_Path())
+def Get_Universal_Subdistribution_Offsets(tier, half_life=None):
+    state = Load_State(Get_Universal_State_Path(half_life))
     if state["frequency_amount_occurrence_counts"] is None:
         raise ValueError("Layered_Occurrence_Count_Populator: universal state is empty — run universal population first")
     return Get_Subdistribution_Offsets_From_State(state, tier)
 
 
-def Get_Speaker_Subdistribution_Offsets(speaker_id, tier):
-    path = Get_Subtractive_Speaker_State_Path(speaker_id, tier)
+def Get_Speaker_Subdistribution_Offsets(speaker_id, tier, half_life=None):
+    path = Get_Subtractive_Speaker_State_Path(speaker_id, tier, half_life)
     state = Load_State(path)
     if state["frequency_amount_occurrence_counts"] is None:
         raise ValueError(f"Layered_Occurrence_Count_Populator: subtractive voice state for speaker '{speaker_id}' is empty — run subtractive voice population first")
@@ -267,9 +285,9 @@ def Get_Speaker_Subdistribution_Offsets(speaker_id, tier):
 
 # --- subtractive analysis runners ---
 
-def Run_Subtractive_Voice_Analysis(speaker_audio_dict, subtractive_subdistribution_tier):
-    universal_offsets = Get_Universal_Subdistribution_Offsets(subtractive_subdistribution_tier)
-    speaker_states = {speaker_id: Load_State(Get_Subtractive_Speaker_State_Path(speaker_id, subtractive_subdistribution_tier)) for speaker_id in speaker_audio_dict}
+def Run_Subtractive_Voice_Analysis(speaker_audio_dict, subtractive_subdistribution_tier, frequency_ratio_cumulation_weight, half_life):
+    universal_offsets = Get_Universal_Subdistribution_Offsets(subtractive_subdistribution_tier, half_life)
+    speaker_states = {speaker_id: Load_State(Get_Subtractive_Speaker_State_Path(speaker_id, subtractive_subdistribution_tier, half_life)) for speaker_id in speaker_audio_dict}
 
     for speaker_id, audio_names in speaker_audio_dict.items():
         state = speaker_states[speaker_id]
@@ -284,29 +302,32 @@ def Run_Subtractive_Voice_Analysis(speaker_audio_dict, subtractive_subdistributi
             if state["frequency_bucket_centers"] is None:
                 state["frequency_bucket_centers"] = frequency_bucket_centers
 
-            updated_counts, updated_timepoints_count = Accumulate_Frequency_Occurrence_Counts(
+            updated_counts, updated_timepoints_count, updated_cumulative_ratios = Accumulate_Frequency_Occurrence_Counts(
                 distribution, frequency_bucket_centers,
                 state["frequency_amount_occurrence_counts"],
                 state["total_voiced_frequency_timepoints_count"],
                 timepoint_mask,
-                universal_offsets
+                universal_offsets,
+                frequency_ratio_cumulation_weight=frequency_ratio_cumulation_weight,
+                existing_cumulative_ratios=state["current_cumulative_frequency_ratios"]
             )
             state["frequency_amount_occurrence_counts"] = updated_counts
             state["total_voiced_frequency_timepoints_count"] = updated_timepoints_count
+            state["current_cumulative_frequency_ratios"] = updated_cumulative_ratios
             Mark_Processed(state, speaker_id, audio_name)
-            Save_State(Get_Subtractive_Speaker_State_Path(speaker_id, subtractive_subdistribution_tier), state)
+            Save_State(Get_Subtractive_Speaker_State_Path(speaker_id, subtractive_subdistribution_tier, half_life), state)
             print(f"Layered_Occurrence_Count_Populator: '{speaker_id}/{audio_name}' complete — '{speaker_id}' voiced timepoints: {int(state['total_voiced_frequency_timepoints_count'])}")
 
     print("Layered_Occurrence_Count_Populator: subtractive voice run complete")
 
 
-def Run_Subtractive_Phoneme_Analysis(speaker_audio_dict, subtractive_subdistribution_tier, subtract_voice_for_phoneme):
-    universal_offsets = Get_Universal_Subdistribution_Offsets(subtractive_subdistribution_tier)
-    phoneme_states = {phoneme: Load_State(Get_Subtractive_Phoneme_State_Path(phoneme, subtractive_subdistribution_tier)) for phoneme in VOICED_PHONEMES}
+def Run_Subtractive_Phoneme_Analysis(speaker_audio_dict, subtractive_subdistribution_tier, subtract_voice_for_phoneme, frequency_ratio_cumulation_weight, half_life):
+    universal_offsets = Get_Universal_Subdistribution_Offsets(subtractive_subdistribution_tier, half_life)
+    phoneme_states = {phoneme: Load_State(Get_Subtractive_Phoneme_State_Path(phoneme, subtractive_subdistribution_tier, half_life)) for phoneme in VOICED_PHONEMES}
 
     for speaker_id, audio_names in speaker_audio_dict.items():
         if subtract_voice_for_phoneme:
-            voice_offsets = Get_Speaker_Subdistribution_Offsets(speaker_id, subtractive_subdistribution_tier)
+            voice_offsets = Get_Speaker_Subdistribution_Offsets(speaker_id, subtractive_subdistribution_tier, half_life)
             combined_offsets = [u + v for u, v in zip(universal_offsets, voice_offsets)]
         else:
             combined_offsets = universal_offsets
@@ -327,19 +348,22 @@ def Run_Subtractive_Phoneme_Analysis(speaker_audio_dict, subtractive_subdistribu
                 if not any(phoneme_mask):
                     continue
                 state = phoneme_states[phoneme]
-                updated_counts, updated_timepoints_count = Accumulate_Frequency_Occurrence_Counts(
+                updated_counts, updated_timepoints_count, updated_cumulative_ratios = Accumulate_Frequency_Occurrence_Counts(
                     distribution, frequency_bucket_centers,
                     state["frequency_amount_occurrence_counts"],
                     state["total_voiced_frequency_timepoints_count"],
                     phoneme_mask,
-                    combined_offsets
+                    combined_offsets,
+                    frequency_ratio_cumulation_weight=frequency_ratio_cumulation_weight,
+                    existing_cumulative_ratios=state["current_cumulative_frequency_ratios"]
                 )
                 state["frequency_amount_occurrence_counts"] = updated_counts
                 state["total_voiced_frequency_timepoints_count"] = updated_timepoints_count
+                state["current_cumulative_frequency_ratios"] = updated_cumulative_ratios
 
             for phoneme, state in phoneme_states.items():
                 Mark_Processed(state, speaker_id, audio_name)
-                Save_State(Get_Subtractive_Phoneme_State_Path(phoneme, subtractive_subdistribution_tier), state)
+                Save_State(Get_Subtractive_Phoneme_State_Path(phoneme, subtractive_subdistribution_tier, half_life), state)
 
             print(f"Layered_Occurrence_Count_Populator: '{speaker_id}/{audio_name}' complete")
 
@@ -348,12 +372,13 @@ def Run_Subtractive_Phoneme_Analysis(speaker_audio_dict, subtractive_subdistribu
 
 # --- subtractive entry point ---
 
-def Run_Subtractive_Layered_Occurrence_Count_Population(speaker_audio_dict, subdistribution_layer, subtractive_subdistribution_tier, subtract_voice_for_phoneme=False):
+def Run_Subtractive_Layered_Occurrence_Count_Population(speaker_audio_dict, subdistribution_layer, subtractive_subdistribution_tier, subtract_voice_for_phoneme=False, frequency_ratio_cumulation_half_life=None):
+    frequency_ratio_cumulation_weight = 0.0 if frequency_ratio_cumulation_half_life is None else Convert_Half_Life_To_Cumulation_Weight(Spectrogram_Window_Jump_In_Seconds, frequency_ratio_cumulation_half_life)
     if subdistribution_layer == "universal":
-        Run_Universal_Analysis(speaker_audio_dict)
+        Run_Universal_Analysis(speaker_audio_dict, frequency_ratio_cumulation_weight, frequency_ratio_cumulation_half_life)
     elif subdistribution_layer == "voice":
-        Run_Subtractive_Voice_Analysis(speaker_audio_dict, subtractive_subdistribution_tier)
+        Run_Subtractive_Voice_Analysis(speaker_audio_dict, subtractive_subdistribution_tier, frequency_ratio_cumulation_weight, frequency_ratio_cumulation_half_life)
     elif subdistribution_layer == "phoneme":
-        Run_Subtractive_Phoneme_Analysis(speaker_audio_dict, subtractive_subdistribution_tier, subtract_voice_for_phoneme)
+        Run_Subtractive_Phoneme_Analysis(speaker_audio_dict, subtractive_subdistribution_tier, subtract_voice_for_phoneme, frequency_ratio_cumulation_weight, frequency_ratio_cumulation_half_life)
     else:
         print(f"WARNING: Layered_Occurrence_Count_Populator: unrecognized subdistribution_layer '{subdistribution_layer}'")

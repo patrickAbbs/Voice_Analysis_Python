@@ -9,10 +9,10 @@ from Global_Hyperparameters import (
     Json_Directory
 )
 from Subdistribution_Extractor import Convert_Occurrence_Counts_To_Ratios
-from Layered_Occurrence_Count_Populator import Process_Audio
+from Layered_Occurrence_Count_Populator import Process_Audio, Format_Half_Life_For_Filename
 from Layered_Subdistribution_Generator import Load_Layered_State, Get_Voiced_Frequency_Bucket_Centers
 from Color_Assignment_Manager import Get_Speaker_Color
-from Voice_Subdistribution_Deviation_Tracker import Convert_Half_Life_To_Cumulation_Weight, Weighted_Average
+from Global_Helper_Functions import Convert_Half_Life_To_Cumulation_Weight, Weighted_Average
 
 
 _SQRT2 = math.sqrt(2.0)
@@ -327,7 +327,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
     opid_hp = aggregate_match_types.get("occurrence_percentile_inverse_deviation", {}).get("hyperparameters", {})
     ophd_hp = aggregate_match_types.get("occurrence_percentile_half_distance", {}).get("hyperparameters", {})
 
-    state_path = Json_Directory + f"Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts.json"
+    voice_profile_half_life = cross_type_hyperparameters.get("voice_profile_cumulation_half_life")
+    state_path = Json_Directory + f"Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts{Format_Half_Life_For_Filename(voice_profile_half_life)}.json"
     state = Load_Layered_State(state_path)
     if state is None:
         print(f"Element_Match_Contribution_Type_Explorer: no data found for voice_id '{voice_id}', aborting")

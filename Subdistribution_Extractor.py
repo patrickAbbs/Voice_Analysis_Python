@@ -16,10 +16,11 @@ class Subdistribution_Tier:
         self.Subdistribution_Sum = sum(subdistribution)
 
 
-def Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progression, frequency_bucket_centers, existing_counts=None, existing_voiced_timepoints_count=0.0, timepoint_mask=None, frequency_ratio_offsets=None):
+def Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progression, frequency_bucket_centers, existing_counts=None, existing_voiced_timepoints_count=0.0, timepoint_mask=None, frequency_ratio_offsets=None, frequency_ratio_cumulation_weight=0.0, existing_cumulative_ratios=None):
     voiced_frequency_limit_index = next((center_index for center_index, center_frequency in enumerate(frequency_bucket_centers) if center_frequency > Subdistribution_Voiced_Frequency_Limit), None)
     frequency_amount_occurrence_counts = existing_counts if existing_counts is not None else [{} for _ in range(voiced_frequency_limit_index)]
     voiced_frequency_timepoints_count = existing_voiced_timepoints_count
+    current_cumulative_frequency_ratios = list(existing_cumulative_ratios) if existing_cumulative_ratios is not None else [None] * voiced_frequency_limit_index
     for timepoint_index in range(len(bucketed_frequency_distribution_progression[0])):
         voiced_frequency_range_distribution_ratio = numpy.sum(bucketed_frequency_distribution_progression[:voiced_frequency_limit_index, timepoint_index])
         if voiced_frequency_range_distribution_ratio < Subdistribution_Timepoint_Voiced_Ratio_Minimum:
@@ -28,7 +29,13 @@ def Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progr
             continue
         voiced_frequency_timepoints_count += 1.0
         for voiced_frequency_index in range(voiced_frequency_limit_index):
-            timepoint_frequency_ratio = bucketed_frequency_distribution_progression[voiced_frequency_index][timepoint_index]
+            raw_ratio = bucketed_frequency_distribution_progression[voiced_frequency_index][timepoint_index]
+            prev = current_cumulative_frequency_ratios[voiced_frequency_index]
+            if frequency_ratio_cumulation_weight == 0.0 or prev is None:
+                current_cumulative_frequency_ratios[voiced_frequency_index] = raw_ratio
+            else:
+                current_cumulative_frequency_ratios[voiced_frequency_index] = prev * frequency_ratio_cumulation_weight + raw_ratio * (1.0 - frequency_ratio_cumulation_weight)
+            timepoint_frequency_ratio = current_cumulative_frequency_ratios[voiced_frequency_index]
             if frequency_ratio_offsets is not None:
                 timepoint_frequency_ratio -= frequency_ratio_offsets[voiced_frequency_index]
             if timepoint_frequency_ratio not in frequency_amount_occurrence_counts[voiced_frequency_index]:
@@ -40,7 +47,7 @@ def Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progr
             for frequency_amount_occurrence_key in frequency_amount_occurrence_counts[voiced_frequency_index]:
                 if frequency_amount_occurrence_key <= timepoint_frequency_ratio:
                     frequency_amount_occurrence_counts[voiced_frequency_index][frequency_amount_occurrence_key] += 1
-    return frequency_amount_occurrence_counts, voiced_frequency_timepoints_count
+    return frequency_amount_occurrence_counts, voiced_frequency_timepoints_count, current_cumulative_frequency_ratios
 
 
 def Convert_Occurrence_Counts_To_Ratios(frequency_amount_occurrence_counts, voiced_frequency_timepoints_count, invert=False):
@@ -53,7 +60,7 @@ def Convert_Occurrence_Counts_To_Ratios(frequency_amount_occurrence_counts, voic
 
 
 def Extract_Frequency_Amount_Occurrence_Ratios(bucketed_frequency_distribution_progression, frequency_bucket_centers):
-    frequency_amount_occurrence_counts, voiced_frequency_timepoints_count = Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progression, frequency_bucket_centers)
+    frequency_amount_occurrence_counts, voiced_frequency_timepoints_count, _ = Accumulate_Frequency_Occurrence_Counts(bucketed_frequency_distribution_progression, frequency_bucket_centers)
     return Convert_Occurrence_Counts_To_Ratios(frequency_amount_occurrence_counts, voiced_frequency_timepoints_count)
 
 
