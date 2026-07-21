@@ -29,9 +29,9 @@ For each frequency bucket, determines the highest amplitude ratio that occurs at
 - Output charts: one "self" chart per audio file (all threshold tiers stacked) and one "cross" chart per threshold tier (all audio files side by side).
 
 **Refactored internals:** The original `Extract_Frequency_Amount_Occurrence_Ratios` was split into two exported functions:
-- `Accumulate_Frequency_Occurrence_Counts(distribution, bucket_centers, existing_counts, existing_timepoints_count, timepoint_mask, frequency_ratio_offsets)` — accumulates counts into an existing state. `timepoint_mask` (optional bool list) skips timepoints; `frequency_ratio_offsets` (optional float list, one per voiced bucket) is subtracted from each bucket's ratio before the threshold check — used by subtractive population runs.
+- `Accumulate_Frequency_Occurrence_Counts(distribution, bucket_centers, existing_counts, existing_timepoints_count, timepoint_mask, frequency_ratio_offsets, frequency_ratio_cumulation_weight=0.0, existing_cumulative_ratios=None)` — accumulates counts into an existing state. `timepoint_mask` (optional bool list) skips timepoints; `frequency_ratio_offsets` (optional float list, one per voiced bucket) is subtracted from each bucket's ratio after the cumulative update; `frequency_ratio_cumulation_weight` (0–1) applies exponential smoothing to each bucket's ratio before counting — when non-zero, each valid timepoint's ratio is an EWA of the previous smoothed value and the raw value, making the logged ratio comparable to similarly weighted runtime values in analysis modules; `existing_cumulative_ratios` (optional list of `float | None`) seeds the per-bucket EWA state and is updated across calls to preserve continuity across audio files. Returns a 3-tuple `(counts, timepoints_count, current_cumulative_ratios)`.
 - `Convert_Occurrence_Counts_To_Ratios(counts, timepoints_count)` — converts raw counts to occurrence ratios.
-- `Extract_Frequency_Amount_Occurrence_Ratios` is now a thin wrapper over both (backward compatible).
+- `Extract_Frequency_Amount_Occurrence_Ratios` is now a thin wrapper over both (backward compatible; ignores the third return value).
 
 ### 4. `Subdistribution_Difference_Analyzer.py`
 Compares the extracted subdistributions between every pair of audio files.
@@ -42,30 +42,34 @@ Compares the extracted subdistributions between every pair of audio files.
 ### 5. `Layered_Occurrence_Count_Populator.py`
 Processes audio from the TIMIT phoneme corpus (`../Phoneme_Corpus/data/TRAIN/DR1/{speaker_id}/{audio_name}.WAV.wav`) and accumulates `frequency_amount_occurrence_counts` state into JSON files for later use by `Layered_Subdistribution_Generator`.
 
-**Entry point 1:** `Run_Layered_Occurence_Count_Population(speaker_audio_dict, subdistribution_layer)`
+**Entry point 1:** `Run_Layered_Occurrence_Count_Population(speaker_audio_dict, subdistribution_layer, frequency_ratio_cumulation_half_life=None)`
 
 - `speaker_audio_dict`: `dict[str, list[str]]` — maps speaker IDs to audio filenames (without extension).
 - `subdistribution_layer`: `"universal"` | `"voice"` | `"phoneme"`
   - `"universal"` — accumulates all voiced timepoints into one global JSON.
   - `"voice"` — one JSON per speaker.
   - `"phoneme"` — one JSON per voiced phoneme (32 phonemes tracked).
+- `frequency_ratio_cumulation_half_life`: optional float. When set, converts to a per-timepoint EWA weight via `Convert_Half_Life_To_Cumulation_Weight` and passes it to `Accumulate_Frequency_Occurrence_Counts`, so the logged frequency ratios are exponentially smoothed in the same style as runtime values in analysis modules. `None` = no smoothing (default, weight = 0).
 - Only timepoints annotated as voiced phonemes in the corresponding `.PHN` file are included. Unvoiced/silence timepoints are skipped via a `timepoint_mask` passed to `Accumulate_Frequency_Occurrence_Counts`.
-- Persists after each audio so progress survives mid-run failures. Skips already-processed audios on re-run (tracked in each JSON's `processed_audios` field).
-- Output JSON files written to `tmp/media/output/`:
-  - `Universal_Frequency_Amount_Occurrence_Counts.json`
-  - `Speaker_{id}_Frequency_Amount_Occurrence_Counts.json`
-  - `Phoneme_{label}_Frequency_Amount_Occurrence_Counts.json`
-- JSON structure: `{ "processed_audios": {speaker_id: [audio_name]}, "total_voiced_frequency_timepoints_count": float, "frequency_amount_occurrence_counts": [{float_key: int}], "frequency_bucket_centers": [float] }`
+- Persists after each audio so progress survives mid-run failures. Skips already-processed audios on re-run (tracked in each JSON's `processed_audios` field). The per-bucket EWA state (`current_cumulative_frequency_ratios`) is also persisted so continuity is maintained when resuming.
+- Output JSON files written to `Json_Directory`. File naming: no suffix when `frequency_ratio_cumulation_half_life=None`; otherwise appends `_{half_life}` with `.` replaced by `o` (e.g. half_life `0.2` → suffix `_0o2`):
+  - `Universal_Frequency_Amount_Occurrence_Counts[_{half_life}].json`
+  - `Speaker_{id}_Frequency_Amount_Occurrence_Counts[_{half_life}].json`
+  - `Phoneme_{label}_Frequency_Amount_Occurrence_Counts[_{half_life}].json`
+- JSON structure: `{ "processed_audios": {speaker_id: [audio_name]}, "total_voiced_frequency_timepoints_count": float, "frequency_amount_occurrence_counts": [{float_key: int}], "frequency_bucket_centers": [float], "current_cumulative_frequency_ratios": [float | null] }`
 
-**Entry point 2:** `Run_Subtractive_Layered_Occurrence_Count_Population(speaker_audio_dict, subdistribution_layer, subtractive_subdistribution_tier, subtract_voice_for_phoneme=False)`
+**Entry point 2:** `Run_Subtractive_Layered_Occurrence_Count_Population(speaker_audio_dict, subdistribution_layer, subtractive_subdistribution_tier, subtract_voice_for_phoneme=False, frequency_ratio_cumulation_half_life=None)`
 
 Same pipeline as entry point 1, but subtracts a pre-computed subdistribution from each bucket's frequency ratio before accumulation, so only the residual above that baseline is counted.
 
 - `subtractive_subdistribution_tier`: float threshold (e.g. `0.9`) identifying which tier of the universal/voice subdistribution to subtract.
+- `frequency_ratio_cumulation_half_life`: same as entry point 1; the same half_life is used when loading the universal/speaker offset files to ensure the subtracted baseline matches the accumulated data.
 - `"universal"` pathway — identical to entry point 1 (no subtraction needed at universal level).
-- `"voice"` pathway — loads the universal subdistribution at `subtractive_subdistribution_tier` once and passes it as `frequency_ratio_offsets` to `Accumulate_Frequency_Occurrence_Counts` for every audio. Writes to `Speaker_{id}_Subtractive_Frequency_Amount_Occurrence_Counts_{tier}.json`.
-- `"phoneme"` pathway — subtracts the universal subdistribution offset; if `subtract_voice_for_phoneme=True`, also subtracts the per-speaker subtractive voice subdistribution (loaded from the speaker's `_Subtractive_` JSON, which must already exist). Writes to `Phoneme_{label}_Subtractive_Frequency_Amount_Occurrence_Counts_{tier}.json`.
-- `{tier}` in filenames is the threshold value with `.` removed (e.g. `0.9` → `09`).
+- `"voice"` pathway — loads the universal subdistribution at `subtractive_subdistribution_tier` once and passes it as `frequency_ratio_offsets` to `Accumulate_Frequency_Occurrence_Counts` for every audio. Writes to `Speaker_{id}_Subtractive_Frequency_Amount_Occurrence_Counts_{tier}[_{half_life}].json`.
+- `"phoneme"` pathway — subtracts the universal subdistribution offset; if `subtract_voice_for_phoneme=True`, also subtracts the per-speaker subtractive voice subdistribution (loaded from the speaker's `_Subtractive_` JSON, which must already exist). Writes to `Phoneme_{label}_Subtractive_Frequency_Amount_Occurrence_Counts_{tier}[_{half_life}].json`.
+- `{tier}` in filenames is the threshold value with `.` replaced by `o` (e.g. `0.9` → `0o9`). Half_life suffix follows the same convention.
+
+**Helper:** `Format_Half_Life_For_Filename(half_life)` — returns `""` if `None`, otherwise `"_" + str(half_life).replace(".", "o")`. Exported for use by other modules that load half_life-keyed JSON files.
 
 ### 6. `Layered_Subdistribution_Generator.py`
 Loads the JSON files produced by `Layered_Occurrence_Count_Populator` and generates tiered subdistribution charts.
@@ -97,7 +101,7 @@ Loads the `_Subtractive_` JSON files produced by `Run_Subtractive_Layered_Occurr
   - `{run_name}_subtractive_voice_subdistributions_{speaker_id}.png`
   - `{run_name}_subtractive_phoneme_subdistributions_{phoneme}.png`
 
-### 7. `Voice_Subdistribution_Deviation_Tracker.py`
+### 7. `Voice_Subdistribution_Deviation_Tracker.py` *(effectively deprecated — superseded by `Element_Match_Contribution_Type_Explorer`)*
 Tracks how a comparative speaker's per-bucket frequency ratios deviate from a reference voice's subdistribution baseline over time, producing an exponentially weighted cumulative progression per frequency bucket.
 
 **Entry point:** `Run_Voice_Subdistribution_Deviation_Tracking(voice_id, comparative_voices_audio_set, occurrence_ratio_threshold, cumulation_half_life)`
@@ -138,8 +142,9 @@ Compares multiple computational approaches for scoring how well a comparative sp
   - `"include_variant"`: bool — whether to run this variant in the current execution.
   - `"hyperparameters"`: dict of variant-specific parameters (see variants below).
 - `cross_type_hyperparameters`: parameters shared across all variants:
-  - `"occurrence_ratio_cumulation_half_life"`: float — converted to per-timepoint exponential decay weight.
+  - `"occurrence_ratio_cumulation_half_life"`: float — converted to per-timepoint exponential decay weight for the runtime cumulative ratio tracking.
   - `"use_bell_curve_percentile_projection"`: bool — if `True`, uses the Gaussian z-score approximation to compute `value_2` (same bell-curve logic as the former module); if `False`, uses direct bisect-based lookup into the inverted occurrence ratios.
+  - `"voice_profile_cumulation_half_life"`: float or `None` — selects which half_life-keyed `Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts` JSON to load as the reference profile. `None` loads the default (no-half_life) file. Must match the `frequency_ratio_cumulation_half_life` used when populating that JSON.
 
 **Shared per-timepoint computation:**
 
@@ -157,9 +162,16 @@ For variants that use `cumulative_comparative_occurrence_ratios` (all except `ra
 
 - **`raw_distance`** — uses `cumulative_raw_distances` instead of `cumulative_comparative_occurrence_ratios`. `value_2 = -|median - timepoint_frequency_ratio|` where median is the per-bucket frequency ratio key with inverted occurrence ratio closest to 0.5. No hyperparameters. Always ≤ 0. Overall per-timepoint: average across buckets.
 
+- **`accumulative_deviation`** — an exponentially decaying running sum (not a `Weighted_Average`-based EWA, except when `use_average_element_deviations` is set) of a per-bucket deviation measure, tracked independently of `cumulative_comparative_occurrence_ratios`. Hyperparameters:
+  - `"decay_half_life"`: float — converted to `accumulative_deviation_decay_rate` via `Convert_Half_Life_To_Cumulation_Weight(Spectrogram_Window_Jump_In_Seconds, decay_half_life)`.
+  - `"deviation_type"`: `"occurrence_percentile_inverse_deviation"` | `"occurrence_percentile_half_distance"` | `"raw_distance"` — selects which of those three variants' calculation is used to compute `current_timepoint_deviation` for a bucket at a timepoint. Unlike the standalone variants of the same name, this calculation is always applied directly to the current timepoint's raw ratio (`value_2` or `timepoint_frequency_ratio`) rather than to a cumulative EWA of it. When the type is `occurrence_percentile_inverse_deviation` or `occurrence_percentile_half_distance`, its hyperparameters are read from that variant's own entry in `aggregate_match_types` (which does not need `include_variant: True` to supply them).
+  - `"use_non_directional_element_deviations"`: bool — if `False`, `current_timepoint_deviation` is sign-flipped (`* -1.0`) whenever the timepoint's raw ratio is below the bucket's median (or bell-curve center).
+  - `"use_average_element_deviations"`: bool — if `True`, the new per-bucket value is `Weighted_Average(previous_value, decay_rate, current_timepoint_deviation, 1.0 - decay_rate)`. If `False`, it is `(previous_value + current_timepoint_deviation) * decay_rate`.
+  - Per-bucket state: `element_accumulative_deviations`, seeded at `0.0`. Overall per-timepoint: `average_element_accumulative_deviations` — the average of the absolute values of that timepoint's new per-bucket entries, negated (always ≤ 0).
+
 **Output charts (three per run):**
-- **Per-speaker overall** (`{run_name}_element_match_overall_{voice_id}_{speaker_id}.png`): one subplot per included variant, single overall timepoint line in speaker color. `weighted_binary_match_contribution` and `occurrence_percentile_deviation` subplots use y ∈ [0, 1]. The other three use y ∈ [global_min, 0], where global_min is the lowest value observed across all speakers for that variant.
-- **Per-speaker per-bucket** (`{run_name}_element_match_per_bucket_{voice_id}_{speaker_id}.png`): one subplot per included variant, one line per frequency bucket (purple→orange gradient). `weighted_binary_match_contribution` subplot shows signed weights (positive in positive zone, negative in negative zone) with symmetric y-axis `[-global_abs_max, global_abs_max]`. `occurrence_percentile_deviation` subplot uses y ∈ [0, 1]. The other three use y ∈ [global_min, 0].
+- **Per-speaker overall** (`{run_name}_element_match_overall_{voice_id}_{speaker_id}.png`): one subplot per included variant, single overall timepoint line in speaker color. `weighted_binary_match_contribution` and `occurrence_percentile_deviation` subplots use y ∈ [0, 1]. The rest (`occurrence_percentile_inverse_deviation`, `occurrence_percentile_half_distance`, `raw_distance`, `accumulative_deviation`) use y ∈ [global_min, 0], where global_min is the lowest value observed across all speakers for that variant.
+- **Per-speaker per-bucket** (`{run_name}_element_match_per_bucket_{voice_id}_{speaker_id}.png`): one subplot per included variant, one line per frequency bucket (purple→orange gradient). `weighted_binary_match_contribution` subplot shows signed weights (positive in positive zone, negative in negative zone) with symmetric y-axis `[-global_abs_max, global_abs_max]`. `occurrence_percentile_deviation` subplot uses y ∈ [0, 1]. `occurrence_percentile_inverse_deviation`, `occurrence_percentile_half_distance`, and `raw_distance` use y ∈ [global_min, 0]. `accumulative_deviation` depends on its own `use_non_directional_element_deviations` hyperparameter: if `False`, y ∈ [global_min, 0] (same rule as the other deviation variants); if `True`, y ∈ [-global_abs_max, global_abs_max] (symmetric, same rule as `weighted_binary_match_contribution`'s bucket chart).
 - **Combined** (`{run_name}_element_match_combined_{voice_id}.png`): one subplot per included variant, all speakers' overall lines overlaid; `voice_id`'s own line is drawn at 1.5× thickness. Y-axis bounds match the per-speaker overall chart.
 
 **`Subdistribution_Extractor.py` change:** `Convert_Occurrence_Counts_To_Ratios` gained an `invert=False` parameter. When `True`, each ratio `v` is stored as `1 - v`. All existing callers use the default and are unaffected.
@@ -167,10 +179,11 @@ For variants that use `cumulative_comparative_occurrence_ratios` (all except `ra
 ### 9. `Occurrence_Ratio_Percentile_Shape_Visualizer.py`
 Visualizes the distribution shape of observed frequency ratios per bucket for a given speaker, to support identifying compact mathematical representations of those distributions.
 
-**Entry point:** `Visualize_Occurrence_Ratio_Percentile_Shapes(voice_ids, proximity_density_distance=0.001)`
+**Entry point:** `Visualize_Occurrence_Ratio_Percentile_Shapes(voice_ids, proximity_density_distance=0.001, voice_profile_cumulation_half_life=None)`
 
 - `voice_ids`: list of speaker IDs to process. One chart is generated per speaker.
 - `proximity_density_distance`: radius used for neighbor counting in subplot 3 (see below).
+- `voice_profile_cumulation_half_life`: float or `None` — selects which half_life-keyed JSON to load, using the same convention as `Element_Match_Contribution_Type_Explorer`. `None` loads the default (no-half_life) file.
 
 **Per-speaker processing:**
 
@@ -225,6 +238,14 @@ Speaker and phoneme colors are assigned permanently on first encounter and persi
 
 `Subdistribution_Display_Colors` in `Global_Hyperparameters.py` has been extended from 10 to 50 named matplotlib colors to minimize recycling. All chart-generation code in `Subdistribution_Extractor`, `Subdistribution_Difference_Analyzer`, and `Layered_Subdistribution_Generator` now calls `Get_Speaker_Color` / `Get_Phoneme_Color` instead of computing colors by position at call time.
 
+## Shared Helpers (`Global_Helper_Functions.py`)
+
+Contains general-purpose utility functions imported by multiple modules:
+- `Convert_Half_Life_To_Cumulation_Weight(processing_window_duration, half_life)` — computes an exponential decay weight as `0.5 ^ (window_duration / half_life)`. Used wherever an EWA half_life is converted to a per-timepoint weight.
+- `Weighted_Average(value_1, weight_1, value_2, weight_2)` — scalar weighted average `(v1*w1 + v2*w2) / (w1+w2)`.
+
+These were previously defined in `Voice_Subdistribution_Deviation_Tracker.py`, which created circular import constraints. They now live here so any module can import them without dependency issues.
+
 ## Dependencies
 
 `numpy`, `soundfile`, `librosa`, `matplotlib`. A `venv` is present at the repo root.
@@ -239,10 +260,12 @@ Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (pipeline):
 - `{run_name}subdistribution_diff_{a}_vs_{b}.png` (one per audio pair)
 - `{run_name}subdistribution_diff_summary.png`
 
-Written to `tmp/media/output/` (corpus analysis):
-- `Universal_Frequency_Amount_Occurrence_Counts.json`
-- `Speaker_{id}_Frequency_Amount_Occurrence_Counts.json`
-- `Phoneme_{label}_Frequency_Amount_Occurrence_Counts.json`
+Written to `Json_Directory` (corpus analysis). Base names shown; suffix `_{half_life}` (with `.` → `o`) is appended when a `frequency_ratio_cumulation_half_life` is set (e.g. `_0o2` for half_life 0.2):
+- `Universal_Frequency_Amount_Occurrence_Counts[_{half_life}].json`
+- `Speaker_{id}_Frequency_Amount_Occurrence_Counts[_{half_life}].json`
+- `Phoneme_{label}_Frequency_Amount_Occurrence_Counts[_{half_life}].json`
+- `Speaker_{id}_Subtractive_Frequency_Amount_Occurrence_Counts_{tier}[_{half_life}].json`
+- `Phoneme_{label}_Subtractive_Frequency_Amount_Occurrence_Counts_{tier}[_{half_life}].json`
 
 Written to `Analysis_Directory` with `Analysis_Run_Name` as prefix (layered subdistribution charts):
 - `{run_name}universal_subdistributions.png`

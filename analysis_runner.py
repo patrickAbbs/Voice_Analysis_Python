@@ -104,14 +104,23 @@ def Run_Element_Match_Contribution_Type_Analysis():
                 }
             },
             "raw_distance": {
-                "include_variant": True,
+                "include_variant": False,
                 "hyperparameters": {}
+            },
+            "accumulative_deviation":{
+                "include_variant": True,
+                "hyperparameters": {
+                    "decay_half_life": 0.2,
+                    "use_non_directional_element_deviations": False,
+                    "use_average_element_deviations": False,
+                    "deviation_type": "occurrence_percentile_inverse_deviation"
+                }
             }
         },
         cross_type_hyperparameters={
             "use_bell_curve_percentile_projection": True,
             "occurrence_ratio_cumulation_half_life": 0.2,
-            "voice_profile_cumulation_half_life": 0.2
+            "voice_profile_cumulation_half_life": None
         }
     )
 

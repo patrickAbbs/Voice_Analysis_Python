@@ -458,9 +458,48 @@ Okay great thanks, a few comments / responses:
     3) To resolve the circular imports issue with the Convert_Half_Life_To_Cumulation_Weight() and Weighted_Average() functions, please move these functions to a new dedicated file called Global_Helper_Functions, and then move all references (including changing the inline formula in Layered_Occurrence_Count_Populator.py to a reference) accordingly. The current housing of those functions in Voice_Subdistribution_Deviation_Tracker does not make much sense, since those are general commonly used helper functions for these analyses that do not have any specific relation to Voice_Subdistribution_Deviation_Tracker.
 
 
+-------------------------------------------------------------------------------------------------------
 
 
+Next, I want you to implement an extension to the Element_Match_Contribution_Type_Explorer module. The goal of this extension is to add a new aggregate_match_type variant option called "accumulative_deviation" alongside the five aggregate_match_type variants that are already implemented. The logic for the accumulative_deviation variant shares some logic with the other currently implemented variants, but also has some distinctive differences. Feel free to reference or reuse existing code where appropriate, or to add new variant-specific code where that is more straightforward.
 
+Like the other variants, accumulative_deviation should have a dedicated sub-dictionary in the aggregate_match_types input dictionary to the Run_Element_Match_Contribution_Type_Exploration() function. An example of what the accumulative_deviation sub-dictionary might look like is:
 
+"accumulative_deviation":{
+    "include_variant": True,
+    "hyperparameters": {
+        "decay_half_life": 0.2,
+        "use_non_directional_element_deviations": True,
+        "use_average_element_deviations": False,
+        "deviation_type": "occurrence_percentile_inverse_deviation"
+    }
+}
 
+If the accumulative_deviation variant is included for a Run_Element_Match_Contribution_Type_Exploration() call (meaning that include_variant is set to True), then the first step is to calculate an accumulation_deviation_decay_rate by calling Convert_Half_Life_To_Cumulation_Weight() with Spectrogram_Window_Jump_In_Seconds as the processing_window_duration and the decay_half_life hyperparameter as the half_life.
+
+Similarly the other variants, for each speaker_id in comparative_voices_audio_set the accumulation_deviation variant should have a variable structured as a dictionary<frequency_center, list<float>> called element_accumulative_deviations, and a variable structured as a list<float> called average_element_accumulative_deviations. The single initial value set for each list in these variables should be 0.0.
+
+Also similarly to the other variants, for each frequency_center for each timepoint there will be a new value calculated and appended to the list for the corresponding frequency_center entry in element_accumulative_deviations. The logic used to calculate this new timepoint value for each frequency_center has some conditional branching depending on the set values of the deviation_type, use_non_directional_element_deviations, and use_average_element_deviations,  hyperparameters.
+
+First, for each frequency_center a variable current_timepoint_deviation is calculated differently depending on the deviation_type hyperparameter. Deviation_type can be set to either occurrence_percentile_inverse_deviation, occurrence_percentile_half_distance, or raw_distance (note: it cannot be set to weighted_binary_match_contribution or occurrence_percentile_deviation), each of which corresponds to one of the currently implemented aggregate_match_types. Whatever deviation_type is set to, the corresponding calculation type should be used to calculate current_timepoint_deviation. An important note here, though, is that that this current_timepoint_deviation value should only be calculated over the timepoint_ratio of the current timepoint, and not over any form of weighted_average of the current timepoint with some other value.
+
+One other conditional modification to the current_timepoint_deviation is performed only if use_non_directional_element_deviations is set to False. If it is, then current_timepoint_deviation is multiplied by -1.0 (in other words it has its sign flipped) if the timepoint_ratio value is below the 50th percentile for the current frequency_center (which corresponds to the "center" value if bell_curve_projection is being used).
+
+Next, the new value to append for the timepoint to the frequency_center's list in element_accumulative_deviations is calculated. This new value is calculated differently depending on the use_average_element_deviations hyperparameter. If the use_average_element_deviations is set to True, then the new value is calculated by calling the Weighted_Average() function, with input values to the function being:
+    1) value_1 is the current last value in the frequency_center's list in element_accumulative_deviations
+    2) value_2 is current_timepoint_deviation
+    3) weight_1 is accumulation_deviation_decay_rate
+    4) weight_2 is (1.0 - accumulation_deviation_decay_rate)
+
+If use_average_element_deviations is set to False, then the new value calculated as follows:
+    1) current_timepoint_deviation is added to the current last value in the frequency_center's list in element_accumulative_deviations
+    2) The new value is then calculated by multiplying the resulting sum by accumulation_deviation_decay_rate
+
+After values have been calculated and appended across all frequency_centers, a single new value for the timepoint is calculated and appended to average_element_accumulative_deviations. This new average_element_accumulative_deviations value is calculated by taking the absolute value of each frequency_center's newly added element_accumulative_deviations value, averaging these absolute values, then multiplying the result by -1.0 to flip the sign to negative.
+
+Finally, the accumulative_deviation variant should be visualized in charts in a similar way to the other variants. For the "Per_Speaker_Overall_Chart" subplot for accumulative_deviation, its y maximum and minimum should be calculated the same way as is used for the occurrence_percentile_inverse_deviation, occurrence_percentile_half_distance, and raw_distance subplots. For the "Per_Speaker_Per_Bucket_Chart" subplot, if use_non_directional_element_deviations is False then y maximum should be 0.0 and y minimum should be the lowest y-axis value across all frequency_buckets across all voice_id <-> speaker pairings for the accumulative_deviation variant. If use_non_directional_element_deviations is True, then y maximum should be set to the highest absolute valued y-axis value across all frequency_buckets across all voice_id <-> speaker pairings for the accumulative_deviation variant, and y minimum should be set to -1.0 times this y maximum. For the "Combined_Overall_Chart" subplot, y minimum and maximum should be the same as for the "Per_Speaker_Overall_Chart" subplot.
+
+Also, as a general stylistic note, to make code readability easier I prefer to always use full words in variable names instead of acronyms or abbreviations. Please use this convention going forward, and change the variable names that currently contain acronyms in the Element_Match_Contribution_Type_Explorer module to replace the acronyms with words. For example, include_opd_buckets should be renamed to include_occurrence_percentile_deviation_buckets, wbmc_hp should be renamed to weighted_binary_match_contribution_hyperparameters, pcr should be renamed to positive_contribution_range, etcetera.
+
+If anything is unclear or ambiguous let me know. Once this new variant is implemented, I will do some test runs to see how it looks.
 
