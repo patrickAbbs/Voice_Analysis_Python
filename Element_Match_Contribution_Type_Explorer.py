@@ -1,5 +1,6 @@
 import bisect
 import math
+import os
 import numpy
 import matplotlib.pyplot as pyplot
 
@@ -166,15 +167,6 @@ def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucke
         elif variant == "accumulative_deviation":
             key = _PER_BUCKET_KEYS[variant]
             if accumulative_deviation_hyperparameters.get("use_non_directional_element_deviations", False):
-                absolute_maximum = 0.0
-                for data in all_results.values():
-                    per_bucket = data.get(key, {})
-                    for freq in voiced_frequency_bucket_centers:
-                        for value in per_bucket.get(freq, []):
-                            if abs(value) > absolute_maximum:
-                                absolute_maximum = abs(value)
-                per_bucket_ylims[variant] = (-absolute_maximum, absolute_maximum)
-            else:
                 global_minimum = 0.0
                 for data in all_results.values():
                     per_bucket = data.get(key, {})
@@ -183,6 +175,15 @@ def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucke
                             if value < global_minimum:
                                 global_minimum = value
                 per_bucket_ylims[variant] = (global_minimum, 0.0)
+            else:
+                absolute_maximum = 0.0
+                for data in all_results.values():
+                    per_bucket = data.get(key, {})
+                    for freq in voiced_frequency_bucket_centers:
+                        for value in per_bucket.get(freq, []):
+                            if abs(value) > absolute_maximum:
+                                absolute_maximum = abs(value)
+                per_bucket_ylims[variant] = (-absolute_maximum, absolute_maximum)
         else:
             key = _PER_BUCKET_KEYS[variant]
             global_minimum = 0.0
@@ -203,41 +204,84 @@ def _Make_X_Values(point_count):
     return [index * Spectrogram_Window_Jump_In_Seconds for index in range(point_count)]
 
 
-def Generate_Per_Speaker_Overall_Chart(voice_id, speaker_id, included_variants, overall_ylims, data):
+def _Build_Sequence_Filename_Suffix(speaker_segments):
+    return "_".join(speaker_id for speaker_id, _, _ in speaker_segments)
+
+
+def _Build_Sequence_Display_Label(speaker_segments):
+    return " → ".join(speaker_id for speaker_id, _, _ in speaker_segments)
+
+
+def _Draw_Speaker_Segment_Annotations(axis, speaker_segments):
+    for index in range(1, len(speaker_segments)):
+        previous_speaker_id, _, _ = speaker_segments[index - 1]
+        speaker_id, start_index, end_index = speaker_segments[index]
+        if start_index >= end_index or speaker_id == previous_speaker_id:
+            continue
+        boundary_x = start_index * Spectrogram_Window_Jump_In_Seconds
+        axis.axvline(boundary_x, color=Get_Speaker_Color(speaker_id), linestyle=":", linewidth=1.0)
+
+    for speaker_id, start_index, end_index in speaker_segments:
+        if start_index >= end_index:
+            continue
+        midpoint_x = ((start_index + end_index - 1) / 2.0) * Spectrogram_Window_Jump_In_Seconds
+        axis.annotate(
+            speaker_id, xy=(midpoint_x, 0.0), xycoords=("data", "axes fraction"),
+            xytext=(0, -15), textcoords="offset points",
+            ha="center", va="top", fontsize=8, annotation_clip=False
+        )
+
+
+def Generate_Per_Speaker_Overall_Chart(voice_id, sequence_index, included_variants, overall_ylims, data):
     variant_count = len(included_variants)
     figure, axes = pyplot.subplots(variant_count, 1, figsize=(20, 5 * variant_count))
     if variant_count == 1:
         axes = [axes]
 
-    color = Get_Speaker_Color(speaker_id)
+    speaker_segments = data["speaker_segments"]
+    sequence_label = _Build_Sequence_Display_Label(speaker_segments)
 
     for axis, variant in zip(axes, included_variants):
         values = data[_OVERALL_KEYS[variant]]
         bucket_x_values = _Make_X_Values(len(values))
-        axis.plot(bucket_x_values, values, color=color, linewidth=0.75)
+
+        for speaker_id, start_index, end_index in speaker_segments:
+            if start_index >= end_index:
+                continue
+            segment_start = max(start_index - 1, 0)
+            axis.plot(
+                bucket_x_values[segment_start:end_index], values[segment_start:end_index],
+                color=Get_Speaker_Color(speaker_id), linewidth=0.75
+            )
+
+        _Draw_Speaker_Segment_Annotations(axis, speaker_segments)
+
         y_limits = overall_ylims[variant]
         axis.set_ylim(y_limits[0], y_limits[1])
         axis.set_xlim(0, bucket_x_values[-1] if bucket_x_values else 0)
-        axis.set_title(f"{variant} | {voice_id} baseline vs {speaker_id}")
+        axis.set_title(f"{variant} | {voice_id} baseline vs {sequence_label}")
         axis.set_xlabel("Time (s)")
         axis.set_ylabel(variant)
         if y_limits[0] < 0 < y_limits[1]:
             axis.axhline(0, color="black", linewidth=0.5)
 
     pyplot.tight_layout()
-    output_path = Analysis_Directory + Analysis_Run_Name + f"_element_match_overall_{voice_id}_{speaker_id}.png"
-    pyplot.savefig(output_path, dpi=Chart_Image_Resolution)
+    filename_suffix = _Build_Sequence_Filename_Suffix(speaker_segments)
+    output_path = Analysis_Directory + Analysis_Run_Name + f"_element_match_overall_{voice_id}_{sequence_index}_{filename_suffix}.png"
+    pyplot.savefig(output_path, dpi=Chart_Image_Resolution, bbox_inches="tight")
     pyplot.close()
     print(f"Element_Match_Contribution_Type_Explorer: overall chart saved to '{output_path}'")
 
 
-def Generate_Per_Speaker_Per_Bucket_Chart(voice_id, speaker_id, included_variants, per_bucket_ylims, data, voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound):
+def Generate_Per_Speaker_Per_Bucket_Chart(voice_id, sequence_index, included_variants, per_bucket_ylims, data, voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound):
     variant_count = len(included_variants)
     figure, axes = pyplot.subplots(variant_count, 1, figsize=(20, 5 * variant_count))
     if variant_count == 1:
         axes = [axes]
 
     colors = _Frequency_Colors(voiced_frequency_bucket_centers)
+    speaker_segments = data["speaker_segments"]
+    sequence_label = _Build_Sequence_Display_Label(speaker_segments)
 
     for axis, variant in zip(axes, included_variants):
         per_bucket_key = _PER_BUCKET_KEYS[variant]
@@ -260,6 +304,8 @@ def Generate_Per_Speaker_Per_Bucket_Chart(voice_id, speaker_id, included_variant
                 bucket_x_values = _Make_X_Values(len(values))
                 axis.plot(bucket_x_values, values, color=colors[freq_index], linewidth=0.5)
 
+        _Draw_Speaker_Segment_Annotations(axis, speaker_segments)
+
         y_limits = per_bucket_ylims.get(variant, (-1.0, 1.0))
         axis.set_ylim(y_limits[0], y_limits[1])
         maximum_x_value = max(
@@ -268,15 +314,16 @@ def Generate_Per_Speaker_Per_Bucket_Chart(voice_id, speaker_id, included_variant
             if per_bucket.get(freq)
         ) if per_bucket else 0
         axis.set_xlim(0, maximum_x_value)
-        axis.set_title(f"{variant} (per bucket) | {voice_id} baseline vs {speaker_id}")
+        axis.set_title(f"{variant} (per bucket) | {voice_id} baseline vs {sequence_label}")
         axis.set_xlabel("Time (s)")
         axis.set_ylabel(variant)
         if y_limits[0] < 0:
             axis.axhline(0, color="black", linewidth=0.5)
 
     pyplot.tight_layout()
-    output_path = Analysis_Directory + Analysis_Run_Name + f"_element_match_per_bucket_{voice_id}_{speaker_id}.png"
-    pyplot.savefig(output_path, dpi=Chart_Image_Resolution)
+    filename_suffix = _Build_Sequence_Filename_Suffix(speaker_segments)
+    output_path = Analysis_Directory + Analysis_Run_Name + f"_element_match_per_bucket_{voice_id}_{sequence_index}_{filename_suffix}.png"
+    pyplot.savefig(output_path, dpi=Chart_Image_Resolution, bbox_inches="tight")
     pyplot.close()
     print(f"Element_Match_Contribution_Type_Explorer: per-bucket chart saved to '{output_path}'")
 
@@ -289,14 +336,24 @@ def Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, 
 
     for axis, variant in zip(axes, included_variants):
         overall_key = _OVERALL_KEYS[variant]
-        for speaker_id, data in all_results.items():
+        labeled_speaker_ids = set()
+        for data in all_results.values():
             values = data[overall_key]
             bucket_x_values = _Make_X_Values(len(values))
-            linewidth = 1.5 if speaker_id == voice_id else 0.75
-            axis.plot(bucket_x_values, values, color=Get_Speaker_Color(speaker_id), linewidth=linewidth, label=speaker_id)
+            for speaker_id, start_index, end_index in data["speaker_segments"]:
+                if start_index >= end_index:
+                    continue
+                segment_start = max(start_index - 1, 0)
+                linewidth = 1.5 if speaker_id == voice_id else 0.75
+                label = speaker_id if speaker_id not in labeled_speaker_ids else None
+                labeled_speaker_ids.add(speaker_id)
+                axis.plot(
+                    bucket_x_values[segment_start:end_index], values[segment_start:end_index],
+                    color=Get_Speaker_Color(speaker_id), linewidth=linewidth, label=label
+                )
         y_limits = overall_ylims[variant]
         axis.set_ylim(y_limits[0], y_limits[1])
-        axis.set_title(f"{variant} — All Speakers vs {voice_id} Baseline")
+        axis.set_title(f"{variant} — All Sequences vs {voice_id} Baseline")
         axis.set_xlabel("Time (s)")
         axis.set_ylabel(variant)
         axis.legend()
@@ -400,7 +457,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
     all_results = {}
 
-    for speaker_id, audio_list in comparative_voices_audio_set.items():
+    for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set):
         cumulative_comparative_occurrence_ratios = {freq: [0.5] for freq in voiced_frequency_bucket_centers} if need_cumulative_comparative_occurrence_ratios else {}
         cumulative_raw_distances = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_raw_distance else {}
 
@@ -422,133 +479,144 @@ def Run_Element_Match_Contribution_Type_Exploration(
         element_accumulative_deviations = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_accumulative_deviation else {}
         average_element_accumulative_deviations = [0.0] if include_accumulative_deviation else []
 
-        for audio_name in audio_list:
-            print(f"Element_Match_Contribution_Type_Explorer: processing '{speaker_id}/{audio_name}'...")
-            distribution, audio_frequency_bucket_centers, timepoint_phonemes = Process_Audio(speaker_id, audio_name)
+        speaker_segments = []
+        processed_timepoint_count = 0
 
-            for timepoint_index in range(len(distribution[0])):
-                voiced_ratio = numpy.sum(distribution[:voiced_frequency_limit_index, timepoint_index])
-                if voiced_ratio < Subdistribution_Timepoint_Voiced_Ratio_Minimum:
-                    continue
-                if timepoint_phonemes[timepoint_index] is None:
-                    continue
+        for speaker_id, audio_list in sub_sequences:
+            segment_start_index = processed_timepoint_count + 1
 
-                timepoint_weighted_binary_match_contribution_weights = []
-                timepoint_weighted_binary_match_contribution_is_positive = []
-                timepoint_occurrence_percentile_deviations = []
-                timepoint_occurrence_percentile_inverse_deviations = []
-                timepoint_occurrence_percentile_half_distances = []
-                timepoint_raw_distances = []
-                timepoint_element_accumulative_deviations = []
+            for audio_name in audio_list:
+                print(f"Element_Match_Contribution_Type_Explorer: processing '{speaker_id}/{audio_name}'...")
+                distribution, audio_frequency_bucket_centers, timepoint_phonemes = Process_Audio(speaker_id, audio_name)
 
-                for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
-                    timepoint_ratio = float(distribution[freq_index][timepoint_index])
+                for timepoint_index in range(len(distribution[0])):
+                    voiced_ratio = numpy.sum(distribution[:voiced_frequency_limit_index, timepoint_index])
+                    if voiced_ratio < Subdistribution_Timepoint_Voiced_Ratio_Minimum:
+                        continue
+                    if timepoint_phonemes[timepoint_index] is None:
+                        continue
 
-                    if need_cumulative_comparative_occurrence_ratios or need_percentile_deviation_for_accumulative_deviation:
-                        if use_bell_curve:
-                            center, lower_standard_deviation, upper_standard_deviation = bell_curve_projections[freq_index]
-                            value_2 = _Bell_Curve_Value_2(timepoint_ratio, center, lower_standard_deviation, upper_standard_deviation)
-                        else:
-                            value_2 = _Lookup_Closest_Value(
-                                inverted_occurrence_ratios[freq_index],
-                                sorted_keys_per_bucket[freq_index],
-                                timepoint_ratio
-                            )
+                    timepoint_weighted_binary_match_contribution_weights = []
+                    timepoint_weighted_binary_match_contribution_is_positive = []
+                    timepoint_occurrence_percentile_deviations = []
+                    timepoint_occurrence_percentile_inverse_deviations = []
+                    timepoint_occurrence_percentile_half_distances = []
+                    timepoint_raw_distances = []
+                    timepoint_element_accumulative_deviations = []
 
-                        if need_cumulative_comparative_occurrence_ratios:
-                            previous_ratio = cumulative_comparative_occurrence_ratios[freq_center][-1]
-                            new_ratio = Weighted_Average(previous_ratio, occurrence_ratio_cumulation_weight, value_2, 1.0 - occurrence_ratio_cumulation_weight)
-                            cumulative_comparative_occurrence_ratios[freq_center].append(new_ratio)
+                    for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
+                        timepoint_ratio = float(distribution[freq_index][timepoint_index])
 
-                    if include_weighted_binary_match_contribution:
-                        weight = _Weighted_Binary_Match_Contribution_Weight(new_ratio, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound, positive_contribution_range, weighted_binary_match_contribution_positive_weight_power_curve, weighted_binary_match_contribution_negative_weight_proximity_half_distance_increment)
-                        match_contribution_weights[freq_center].append(weight)
-                        timepoint_weighted_binary_match_contribution_weights.append(weight)
-                        timepoint_weighted_binary_match_contribution_is_positive.append(weighted_binary_match_contribution_lower_bound <= new_ratio <= weighted_binary_match_contribution_upper_bound)
+                        if need_cumulative_comparative_occurrence_ratios or need_percentile_deviation_for_accumulative_deviation:
+                            if use_bell_curve:
+                                center, lower_standard_deviation, upper_standard_deviation = bell_curve_projections[freq_index]
+                                value_2 = _Bell_Curve_Value_2(timepoint_ratio, center, lower_standard_deviation, upper_standard_deviation)
+                            else:
+                                value_2 = _Lookup_Closest_Value(
+                                    inverted_occurrence_ratios[freq_index],
+                                    sorted_keys_per_bucket[freq_index],
+                                    timepoint_ratio
+                                )
 
-                    if need_occurrence_percentile_deviation_buckets:
-                        deviation = _Occurrence_Percentile_Deviation(new_ratio)
-                        occurrence_percentile_deviations[freq_center].append(deviation)
-                        timepoint_occurrence_percentile_deviations.append(deviation)
+                            if need_cumulative_comparative_occurrence_ratios:
+                                previous_ratio = cumulative_comparative_occurrence_ratios[freq_center][-1]
+                                new_ratio = Weighted_Average(previous_ratio, occurrence_ratio_cumulation_weight, value_2, 1.0 - occurrence_ratio_cumulation_weight)
+                                cumulative_comparative_occurrence_ratios[freq_center].append(new_ratio)
 
-                        if include_occurrence_percentile_inverse_deviation:
-                            inverse_deviation = _Occurrence_Percentile_Inverse_Deviation(deviation, occurrence_percentile_inverse_deviation_hyperparameters["deviation_power_curve"], occurrence_percentile_inverse_deviation_hyperparameters["inverse_deviation_minimum"])
-                            occurrence_percentile_inverse_deviations[freq_center].append(inverse_deviation)
-                            timepoint_occurrence_percentile_inverse_deviations.append(inverse_deviation)
+                        if include_weighted_binary_match_contribution:
+                            weight = _Weighted_Binary_Match_Contribution_Weight(new_ratio, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound, positive_contribution_range, weighted_binary_match_contribution_positive_weight_power_curve, weighted_binary_match_contribution_negative_weight_proximity_half_distance_increment)
+                            match_contribution_weights[freq_center].append(weight)
+                            timepoint_weighted_binary_match_contribution_weights.append(weight)
+                            timepoint_weighted_binary_match_contribution_is_positive.append(weighted_binary_match_contribution_lower_bound <= new_ratio <= weighted_binary_match_contribution_upper_bound)
 
-                        if include_occurrence_percentile_half_distance:
-                            half_distance = _Occurrence_Percentile_Half_Distance(deviation, occurrence_percentile_half_distance_hyperparameters["half_distance_minimum"])
-                            occurrence_percentile_half_distances[freq_center].append(half_distance)
-                            timepoint_occurrence_percentile_half_distances.append(half_distance)
+                        if need_occurrence_percentile_deviation_buckets:
+                            deviation = _Occurrence_Percentile_Deviation(new_ratio)
+                            occurrence_percentile_deviations[freq_center].append(deviation)
+                            timepoint_occurrence_percentile_deviations.append(deviation)
 
-                    if include_raw_distance:
-                        raw_distance_value_2 = -1.0 * abs(bucket_medians[freq_index] - timepoint_ratio)
-                        previous_raw_distance = cumulative_raw_distances[freq_center][-1]
-                        new_raw_distance = Weighted_Average(previous_raw_distance, occurrence_ratio_cumulation_weight, raw_distance_value_2, 1.0 - occurrence_ratio_cumulation_weight)
-                        cumulative_raw_distances[freq_center].append(new_raw_distance)
-                        timepoint_raw_distances.append(new_raw_distance)
+                            if include_occurrence_percentile_inverse_deviation:
+                                inverse_deviation = _Occurrence_Percentile_Inverse_Deviation(deviation, occurrence_percentile_inverse_deviation_hyperparameters["deviation_power_curve"], occurrence_percentile_inverse_deviation_hyperparameters["inverse_deviation_minimum"])
+                                occurrence_percentile_inverse_deviations[freq_center].append(inverse_deviation)
+                                timepoint_occurrence_percentile_inverse_deviations.append(inverse_deviation)
 
-                    if include_accumulative_deviation:
-                        if accumulative_deviation_deviation_type == "raw_distance":
-                            current_timepoint_deviation = -1.0 * abs(bucket_medians[freq_index] - timepoint_ratio)
-                        else:
-                            current_timepoint_percentile_deviation = _Occurrence_Percentile_Deviation(value_2)
-                            if accumulative_deviation_deviation_type == "occurrence_percentile_inverse_deviation":
-                                current_timepoint_deviation = _Occurrence_Percentile_Inverse_Deviation(
-                                    current_timepoint_percentile_deviation,
-                                    occurrence_percentile_inverse_deviation_hyperparameters["deviation_power_curve"],
-                                    occurrence_percentile_inverse_deviation_hyperparameters["inverse_deviation_minimum"]
+                            if include_occurrence_percentile_half_distance:
+                                half_distance = _Occurrence_Percentile_Half_Distance(deviation, occurrence_percentile_half_distance_hyperparameters["half_distance_minimum"])
+                                occurrence_percentile_half_distances[freq_center].append(half_distance)
+                                timepoint_occurrence_percentile_half_distances.append(half_distance)
+
+                        if include_raw_distance:
+                            raw_distance_value_2 = -1.0 * abs(bucket_medians[freq_index] - timepoint_ratio)
+                            previous_raw_distance = cumulative_raw_distances[freq_center][-1]
+                            new_raw_distance = Weighted_Average(previous_raw_distance, occurrence_ratio_cumulation_weight, raw_distance_value_2, 1.0 - occurrence_ratio_cumulation_weight)
+                            cumulative_raw_distances[freq_center].append(new_raw_distance)
+                            timepoint_raw_distances.append(new_raw_distance)
+
+                        if include_accumulative_deviation:
+                            if accumulative_deviation_deviation_type == "raw_distance":
+                                current_timepoint_deviation = -1.0 * abs(bucket_medians[freq_index] - timepoint_ratio)
+                            else:
+                                current_timepoint_percentile_deviation = _Occurrence_Percentile_Deviation(value_2)
+                                if accumulative_deviation_deviation_type == "occurrence_percentile_inverse_deviation":
+                                    current_timepoint_deviation = _Occurrence_Percentile_Inverse_Deviation(
+                                        current_timepoint_percentile_deviation,
+                                        occurrence_percentile_inverse_deviation_hyperparameters["deviation_power_curve"],
+                                        occurrence_percentile_inverse_deviation_hyperparameters["inverse_deviation_minimum"]
+                                    )
+                                else:
+                                    current_timepoint_deviation = _Occurrence_Percentile_Half_Distance(
+                                        current_timepoint_percentile_deviation,
+                                        occurrence_percentile_half_distance_hyperparameters["half_distance_minimum"]
+                                    )
+
+                            if not accumulative_deviation_use_non_directional_element_deviations:
+                                if timepoint_ratio < bucket_medians[freq_index]:
+                                    current_timepoint_deviation *= -1.0
+
+                            previous_element_accumulative_deviation = element_accumulative_deviations[freq_center][-1]
+                            if accumulative_deviation_use_average_element_deviations:
+                                new_element_accumulative_deviation = Weighted_Average(
+                                    previous_element_accumulative_deviation, accumulative_deviation_decay_rate,
+                                    current_timepoint_deviation, 1.0 - accumulative_deviation_decay_rate
                                 )
                             else:
-                                current_timepoint_deviation = _Occurrence_Percentile_Half_Distance(
-                                    current_timepoint_percentile_deviation,
-                                    occurrence_percentile_half_distance_hyperparameters["half_distance_minimum"]
-                                )
+                                new_element_accumulative_deviation = (previous_element_accumulative_deviation + current_timepoint_deviation) * accumulative_deviation_decay_rate
 
-                        if not accumulative_deviation_use_non_directional_element_deviations:
-                            if timepoint_ratio < bucket_medians[freq_index]:
-                                current_timepoint_deviation *= -1.0
+                            element_accumulative_deviations[freq_center].append(new_element_accumulative_deviation)
+                            timepoint_element_accumulative_deviations.append(new_element_accumulative_deviation)
 
-                        previous_element_accumulative_deviation = element_accumulative_deviations[freq_center][-1]
-                        if accumulative_deviation_use_average_element_deviations:
-                            new_element_accumulative_deviation = Weighted_Average(
-                                previous_element_accumulative_deviation, accumulative_deviation_decay_rate,
-                                current_timepoint_deviation, 1.0 - accumulative_deviation_decay_rate
-                            )
+                    if include_weighted_binary_match_contribution:
+                        total_weight = sum(timepoint_weighted_binary_match_contribution_weights)
+                        if total_weight == 0.0:
+                            weighted_binary_match_contributions.append(0.5)
                         else:
-                            new_element_accumulative_deviation = (previous_element_accumulative_deviation + current_timepoint_deviation) * accumulative_deviation_decay_rate
+                            weighted_binary_match_contributions.append(
+                                sum(weight for weight, positive in zip(timepoint_weighted_binary_match_contribution_weights, timepoint_weighted_binary_match_contribution_is_positive) if positive) / total_weight
+                            )
 
-                        element_accumulative_deviations[freq_center].append(new_element_accumulative_deviation)
-                        timepoint_element_accumulative_deviations.append(new_element_accumulative_deviation)
+                    if include_occurrence_percentile_deviation:
+                        average_occurrence_percentile_deviations.append(sum(timepoint_occurrence_percentile_deviations) / len(timepoint_occurrence_percentile_deviations) if timepoint_occurrence_percentile_deviations else 1.0)
 
-                if include_weighted_binary_match_contribution:
-                    total_weight = sum(timepoint_weighted_binary_match_contribution_weights)
-                    if total_weight == 0.0:
-                        weighted_binary_match_contributions.append(0.5)
-                    else:
-                        weighted_binary_match_contributions.append(
-                            sum(weight for weight, positive in zip(timepoint_weighted_binary_match_contribution_weights, timepoint_weighted_binary_match_contribution_is_positive) if positive) / total_weight
+                    if include_occurrence_percentile_inverse_deviation:
+                        average_occurrence_percentile_inverse_deviations.append(sum(timepoint_occurrence_percentile_inverse_deviations) / len(timepoint_occurrence_percentile_inverse_deviations) if timepoint_occurrence_percentile_inverse_deviations else -1.0)
+
+                    if include_occurrence_percentile_half_distance:
+                        average_occurrence_percentile_half_distances.append(sum(timepoint_occurrence_percentile_half_distances) / len(timepoint_occurrence_percentile_half_distances) if timepoint_occurrence_percentile_half_distances else 0.0)
+
+                    if include_raw_distance:
+                        average_raw_distances.append(sum(timepoint_raw_distances) / len(timepoint_raw_distances) if timepoint_raw_distances else 0.0)
+
+                    if include_accumulative_deviation:
+                        average_element_accumulative_deviations.append(
+                            -1.0 * (sum(abs(value) for value in timepoint_element_accumulative_deviations) / len(timepoint_element_accumulative_deviations))
+                            if timepoint_element_accumulative_deviations else 0.0
                         )
 
-                if include_occurrence_percentile_deviation:
-                    average_occurrence_percentile_deviations.append(sum(timepoint_occurrence_percentile_deviations) / len(timepoint_occurrence_percentile_deviations) if timepoint_occurrence_percentile_deviations else 1.0)
+                    processed_timepoint_count += 1
 
-                if include_occurrence_percentile_inverse_deviation:
-                    average_occurrence_percentile_inverse_deviations.append(sum(timepoint_occurrence_percentile_inverse_deviations) / len(timepoint_occurrence_percentile_inverse_deviations) if timepoint_occurrence_percentile_inverse_deviations else -1.0)
+            segment_end_index = processed_timepoint_count + 1
+            speaker_segments.append((speaker_id, segment_start_index, segment_end_index))
 
-                if include_occurrence_percentile_half_distance:
-                    average_occurrence_percentile_half_distances.append(sum(timepoint_occurrence_percentile_half_distances) / len(timepoint_occurrence_percentile_half_distances) if timepoint_occurrence_percentile_half_distances else 0.0)
-
-                if include_raw_distance:
-                    average_raw_distances.append(sum(timepoint_raw_distances) / len(timepoint_raw_distances) if timepoint_raw_distances else 0.0)
-
-                if include_accumulative_deviation:
-                    average_element_accumulative_deviations.append(
-                        -1.0 * (sum(abs(value) for value in timepoint_element_accumulative_deviations) / len(timepoint_element_accumulative_deviations))
-                        if timepoint_element_accumulative_deviations else 0.0
-                    )
-
-        speaker_data = {}
+        speaker_data = {"speaker_segments": speaker_segments}
         if need_cumulative_comparative_occurrence_ratios:
             speaker_data["cumulative_comparative_occurrence_ratios"] = cumulative_comparative_occurrence_ratios
         if include_weighted_binary_match_contribution:
@@ -570,7 +638,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
         if include_accumulative_deviation:
             speaker_data["element_accumulative_deviations"] = element_accumulative_deviations
             speaker_data["average_element_accumulative_deviations"] = average_element_accumulative_deviations
-        all_results[speaker_id] = speaker_data
+        all_results[sequence_index] = speaker_data
 
     overall_ylims, per_bucket_ylims = _Compute_Global_Ylims(
         included_variants, all_results, voiced_frequency_bucket_centers,
@@ -578,9 +646,11 @@ def Run_Element_Match_Contribution_Type_Exploration(
         accumulative_deviation_hyperparameters
     )
 
-    for speaker_id in comparative_voices_audio_set:
-        Generate_Per_Speaker_Overall_Chart(voice_id, speaker_id, included_variants, overall_ylims, all_results[speaker_id])
-        Generate_Per_Speaker_Per_Bucket_Chart(voice_id, speaker_id, included_variants, per_bucket_ylims, all_results[speaker_id], voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound)
+    os.makedirs(Analysis_Directory, exist_ok=True)
+
+    for sequence_index in range(len(comparative_voices_audio_set)):
+        Generate_Per_Speaker_Overall_Chart(voice_id, sequence_index, included_variants, overall_ylims, all_results[sequence_index])
+        Generate_Per_Speaker_Per_Bucket_Chart(voice_id, sequence_index, included_variants, per_bucket_ylims, all_results[sequence_index], voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound)
 
     Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, all_results)
     print(f"Element_Match_Contribution_Type_Explorer: exploration complete for voice_id '{voice_id}'")

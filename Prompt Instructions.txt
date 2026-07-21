@@ -503,3 +503,10 @@ Also, as a general stylistic note, to make code readability easier I prefer to a
 
 If anything is unclear or ambiguous let me know. Once this new variant is implemented, I will do some test runs to see how it looks.
 
+--------------------------
+
+After looking a little closer at the output, I do see something that seems indicate a bug somewhere in the new accumulation_deviation variant logic and / or chart generation. I ran Run_Element_Match_Contribution_Type_Analysis() with accumulative_deviation included and use_non_directional_element_deviations set to False. I would expect this to result in the accumulative_deviation subplot of the Per_Speaker_Per_Bucket_Chart to have y axis values that go both above and below 0, since when use_non_directional_element_deviations is False the frequency_bucket deviation values should be sign flipped when timepoint_ratio is below the 50th percentile value. However, all accumulative_deviation y values for the Per_Speaker_Per_Bucket_Chart are below 0. Can you figure out why this is happening?
+
+--------------------------
+
+Ah okay yes, I did have the instructions for the chart rendering flipped the wrong way in my original instructions. It should have read "if use_non_directional_element_deviations is True then y maximum should be 0.0 and y minimum should be the lowest y-axis value across all frequency_buckets across all voice_id <-> speaker pairings for the accumulative_deviation variant. If use_non_directional_element_deviations is False, then y maximum should be set to the highest absolute valued y-axis value across all frequency_buckets across all voice_id <-> speaker pairings for the accumulative_deviation variant, and y minimum should be set to -1.0 times this y maximum"
