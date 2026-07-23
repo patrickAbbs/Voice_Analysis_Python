@@ -75,13 +75,6 @@ def Run_Analysis():
     all_audios_analysis_data = Analyze_Subdistribution_Differences(all_audios_analysis_data)
 
 
-def Generate_Conversation():
-    Generate_Simulated_Conversation_Set(6, {"FDAW0": 0.4, "MDAC0": 0.4, "MDPK0": 0.2}, 
-                                        turn_duration_seeds={"base_duration": 10.0, "deviation_ratio": 0.5, "power_curve": 1.0},
-                                        conversation_duration_seeds={"base_duration": 50.0, "deviation_ratio": 0.9, "power_curve": 0.5}
-                                        )
-
-
 def Run_Subdstributions():
     #Run_Layered_Occurrence_Count_Population(Layered_Subdistribution_Audio_Set, Subdistribution_Layer)
     #Run_Layered_Occurrence_Count_Population(New_Partial_Speaker_Audio_Set, Subdistribution_Layer)
@@ -100,7 +93,7 @@ def Run_Voice_Subdistribution_Deviation_Analysis():
     Run_Voice_Subdistribution_Deviation_Tracking("FECD0", Layered_Subdistribution_Audio_Set, 0.9875, 0.3)
 
 def Run_Element_Match_Contribution_Type_Analysis():
-    Run_Element_Match_Contribution_Type_Exploration("MDAC0", Conversational_Speaker_Audio_Set_File_Name,
+    Run_Element_Match_Contribution_Type_Exploration(["FDAW0", "MDAC0", "MDPK0"], Conversational_Speaker_Audio_Set_File_Name,
         aggregate_match_types={
             "weighted_binary_match_contribution": {
                 "include_variant": True,
@@ -134,7 +127,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "accumulative_deviation":{
                 "include_variant": True,
                 "hyperparameters": {
-                    "decay_half_life": 0.2,
+                    "decay_half_life": 1.0,
                     "use_non_directional_element_deviations": False,
                     "use_average_element_deviations": False,
                     "deviation_type": "occurrence_percentile_inverse_deviation"
@@ -143,7 +136,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
         },
         cross_type_hyperparameters={
             "use_bell_curve_percentile_projection": True,
-            "occurrence_ratio_cumulation_half_life": 0.2,
+            "occurrence_ratio_cumulation_half_life": 1.0,
             "voice_profile_cumulation_half_life": None
         }
     )
@@ -152,6 +145,12 @@ def Run_Visualize_Occurrence_Ratio_Percentile_Shapes():
     #Visualize_Occurrence_Ratio_Percentile_Shapes(["FCJF0", "MEDR0"], proximity_density_distance=0.001)
     Visualize_Occurrence_Ratio_Percentile_Shapes(["FCJF0", "MEDR0", "MCPM0", "FDAW0", "FDML0", "MDAC0", "FECD0", "MDPK0"], 
                                                  proximity_density_distance=0.0008, voice_profile_cumulation_half_life=0.2)
+
+def Generate_Conversation():
+    Generate_Simulated_Conversation_Set(4, {"FDAW0": 0.4, "MDAC0": 0.4, "MDPK0": 0.2}, 
+                                        turn_duration_seeds={"base_duration": 10.0, "deviation_ratio": 0.5, "power_curve": 1.0},
+                                        conversation_duration_seeds={"base_duration": 50.0, "deviation_ratio": 0.9, "power_curve": 0.5}
+                                        )
 
 #Run_Analysis()
 #Run_Subdstributions()
