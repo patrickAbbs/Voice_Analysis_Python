@@ -1,13 +1,12 @@
 import json
 import os
 
-from Global_Hyperparameters import Distribution_Types, Spectrogram_Window_Jump_In_Seconds, Json_Directory
+from Global_Hyperparameters import Distribution_Types, Spectrogram_Window_Jump_In_Seconds, Json_Directory, Phoneme_Corpus_Directory
 from Global_Helper_Functions import Convert_Half_Life_To_Cumulation_Weight
 from Spectrogram_Generator import Generate_Audio_Spectrogram
 from Frequency_Distribution_Generator import Generate_Frequency_Bucket_Centers, Generate_Typed_Bucketed_Frequency_Progressions, Generate_Typed_Bucketed_Frequency_Distributions
 from Subdistribution_Extractor import Accumulate_Frequency_Occurrence_Counts, Convert_Occurrence_Counts_To_Ratios, Extract_Frequency_Subdistributions
 
-PHONEME_CORPUS_DIRECTORY = "../Phoneme_Corpus/data/TRAIN/DR1/"
 CORPUS_AUDIO_EXTENSION = ".WAV.wav"
 DISTRIBUTION_TYPE = Distribution_Types[0]
 
@@ -120,7 +119,7 @@ def Map_Timepoints_To_Phonemes(phoneme_annotations, timepoint_count, sample_rate
 # --- shared audio processing ---
 
 def Process_Audio(speaker_id, audio_name):
-    speaker_directory = PHONEME_CORPUS_DIRECTORY + speaker_id + "/"
+    speaker_directory = Phoneme_Corpus_Directory + speaker_id + "/"
     spectrogram_data = Generate_Audio_Spectrogram(speaker_directory, audio_name, CORPUS_AUDIO_EXTENSION)
     frequency_bucket_centers = Generate_Frequency_Bucket_Centers(spectrogram_data.Frequencies)
     typed_progressions = Generate_Typed_Bucketed_Frequency_Progressions(spectrogram_data.Spectrogram, spectrogram_data.Frequencies, frequency_bucket_centers)

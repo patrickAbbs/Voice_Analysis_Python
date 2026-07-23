@@ -1,4 +1,5 @@
 import bisect
+import json
 import math
 import os
 import numpy
@@ -14,6 +15,7 @@ from Layered_Occurrence_Count_Populator import Process_Audio, Format_Half_Life_F
 from Layered_Subdistribution_Generator import Load_Layered_State, Get_Voiced_Frequency_Bucket_Centers
 from Color_Assignment_Manager import Get_Speaker_Color
 from Global_Helper_Functions import Convert_Half_Life_To_Cumulation_Weight, Weighted_Average
+from Simulated_Conversation_Generator import Conversation_Sequence_Json_Directory
 
 
 _SQRT2 = math.sqrt(2.0)
@@ -369,12 +371,24 @@ def Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, 
 
 # --- entry point ---
 
+def Load_Comparative_Voices_Audio_Set(conversation_json_file_name):
+    conversation_json_path = Conversation_Sequence_Json_Directory + conversation_json_file_name
+    with open(conversation_json_path, "r") as f:
+        raw_comparative_voices_audio_set = json.load(f)
+    return [
+        [(speaker_id, audio_list) for speaker_id, audio_list in sub_sequences]
+        for sub_sequences in raw_comparative_voices_audio_set
+    ]
+
+
 def Run_Element_Match_Contribution_Type_Exploration(
     voice_id,
-    comparative_voices_audio_set,
+    conversation_json_file_name,
     aggregate_match_types,
     cross_type_hyperparameters
 ):
+    comparative_voices_audio_set = Load_Comparative_Voices_Audio_Set(conversation_json_file_name)
+
     occurrence_ratio_cumulation_weight = Convert_Half_Life_To_Cumulation_Weight(
         Spectrogram_Window_Jump_In_Seconds, cross_type_hyperparameters["occurrence_ratio_cumulation_half_life"]
     )

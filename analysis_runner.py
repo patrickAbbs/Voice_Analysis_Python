@@ -13,6 +13,7 @@ from Layered_Subdistribution_Generator import Run_Layered_Subdistribution_Genera
 from Voice_Subdistribution_Deviation_Tracker import Run_Voice_Subdistribution_Deviation_Tracking
 from Element_Match_Contribution_Type_Explorer import Run_Element_Match_Contribution_Type_Exploration
 from Occurrence_Ratio_Percentile_Shape_Visualizer import Visualize_Occurrence_Ratio_Percentile_Shapes
+from Simulated_Conversation_Generator import Generate_Simulated_Conversation_Set
 
 Layered_Subdistribution_Audio_Set = {
     "FCJF0": ["SA1", "SA2", "SI648", "SI1027", "SI1657", "SX37", "SX127", "SX217", "SX307", "SX397"], 
@@ -42,9 +43,7 @@ Conversational_Layered_Subdistribution_Audio_Set = [
     [("MGRL0", ["SA1", "SA2", "SI867", "SI1497", "SI2127", "SX57", "SX147", "SX237", "SX327", "SX417"])]
 ]
 
-Conversational_Speaker_Audio_Set = [
-    [("FCJF0", ["SA1", "SA2", "SI648"]), ("MEDR0", ["SI744", "SI1374", "SI2004"]), ("FCJF0", ["SI1027", "SI1657", "SX37"]), ("FECD0", ["SI2048", "SX68"])],
-]
+Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
 
 New_Partial_Speaker_Audio_Set = {
     "FJSP0": ["SA1", "SA2", "SI804", "SI1434", "SI1763", "SX84", "SX174", "SX264"],
@@ -75,6 +74,14 @@ def Run_Analysis():
     all_audios_analysis_data = Extract_Frequency_Subdistribution_Sets(all_audios_analysis_data)
     all_audios_analysis_data = Analyze_Subdistribution_Differences(all_audios_analysis_data)
 
+
+def Generate_Conversation():
+    Generate_Simulated_Conversation_Set(6, {"FDAW0": 0.4, "MDAC0": 0.4, "MDPK0": 0.2}, 
+                                        turn_duration_seeds={"base_duration": 10.0, "deviation_ratio": 0.5, "power_curve": 1.0},
+                                        conversation_duration_seeds={"base_duration": 50.0, "deviation_ratio": 0.9, "power_curve": 0.5}
+                                        )
+
+
 def Run_Subdstributions():
     #Run_Layered_Occurrence_Count_Population(Layered_Subdistribution_Audio_Set, Subdistribution_Layer)
     #Run_Layered_Occurrence_Count_Population(New_Partial_Speaker_Audio_Set, Subdistribution_Layer)
@@ -93,7 +100,7 @@ def Run_Voice_Subdistribution_Deviation_Analysis():
     Run_Voice_Subdistribution_Deviation_Tracking("FECD0", Layered_Subdistribution_Audio_Set, 0.9875, 0.3)
 
 def Run_Element_Match_Contribution_Type_Analysis():
-    Run_Element_Match_Contribution_Type_Exploration("MEDR0", Conversational_Speaker_Audio_Set,
+    Run_Element_Match_Contribution_Type_Exploration("MDAC0", Conversational_Speaker_Audio_Set_File_Name,
         aggregate_match_types={
             "weighted_binary_match_contribution": {
                 "include_variant": True,
@@ -152,3 +159,5 @@ def Run_Visualize_Occurrence_Ratio_Percentile_Shapes():
 #Run_Voice_Subdistribution_Deviation_Analysis()
 Run_Element_Match_Contribution_Type_Analysis()
 #Run_Visualize_Occurrence_Ratio_Percentile_Shapes()
+
+#Generate_Conversation()

@@ -510,3 +510,69 @@ After looking a little closer at the output, I do see something that seems indic
 --------------------------
 
 Ah okay yes, I did have the instructions for the chart rendering flipped the wrong way in my original instructions. It should have read "if use_non_directional_element_deviations is True then y maximum should be 0.0 and y minimum should be the lowest y-axis value across all frequency_buckets across all voice_id <-> speaker pairings for the accumulative_deviation variant. If use_non_directional_element_deviations is False, then y maximum should be set to the highest absolute valued y-axis value across all frequency_buckets across all voice_id <-> speaker pairings for the accumulative_deviation variant, and y minimum should be set to -1.0 times this y maximum"
+
+
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to implement a refactor to the way the comparative_voices_audio_set input parameter for Run_Element_Match_Contribution_Type_Exploration() is structured. The goal of this refactor is to allow audio sequences that simulate "conversations" by alternating back and forth between different speakers in a single audio sequence, rather than the current implementation which each audio sequence only contains audio belonging to a single speaker. I think I have accounted for all of the logic that this refactor will impact in my instructions below, but if I have missed or misrepresented anything let me know.
+
+For this refactor, the comparative_voices_audio_set parameter should be restructured from its current dictionary<speaker_id, list<audio_file>> form to instead be a list<list<tuple<speaker_id, list<audio_file>>>>. So, for example, one possible value for comparative_voices_audio_set would be:
+
+[
+    [("FCJF0", ["SA1", "SA2", "SI648", "SI1027", "SI1657", "SX37", "SX127", "SX217", "SX307", "SX397"])],
+    [("FCJF0", ["SA1", "SA2", "SI648"]), ("MEDR0", ["SI744", "SI1374", "SI2004"]), ("FCJF0", ["SI1027", "SI1657", "SX37"]) ("FECD0", ["SI2048", "SX68"])],
+]
+
+Each top-level list in comparative_voices_audio_set encompasses a set of audios that should all be processed together, just like how each dictionary entry list in the previous structure encompassed a set of audios that should all be processed together. However, instead of all of audios in each top-level list corresponding to a single speaker, instead each tuple within the list encompasses one speaker -> audio sequence subset pairing, and these per-speaker sequence subsets are then joined together to form an overall audio sequence.
+
+So, to reference the example comparative_voices_audio_set above, the first list entry [("FCJF0", ["SA1", "SA2", "SI648", "SI1027", "SI1657", "SX37", "SX127", "SX217", "SX307", "SX397"])] is functionally equivalent to what a dictionary entry of "FCJF0": ["SA1", "SA2", "SI648", "SI1027", "SI1657", "SX37", "SX127", "SX217", "SX307", "SX397"] would have meant under the prior structure. For the second example entry [("FCJF0", ["SA1", "SA2", "SI648"]), ("MEDR0", ["SI744", "SI1374", "SI2004"]), ("FCJF0", ["SI1027", "SI1657", "SX37"]) ("FECD0", ["SI2048", "SX68"])], this indicates that a corresponding audio sequence should be processed that starts with "SA1", "SA2", and "SI648" for speaker_id "FCJF0", followed by "SI744", "SI1374", and "SI2004" for speaker "MEDR0", followed by "SI1027", "SI1657", and "SX37" for speaker "FCJF0" again, followed by "SI2048" and "SX68" for speaker "FECD0".
+
+I don't think this comparative_voices_audio_set structure change should meaningfully impact much of the actual processing logic in Run_Element_Match_Contribution_Type_Exploration(), but it will require a few changes to the ways that the output charts are displayed and named since the charts are currently designed around an assumption that each charted audio sequence belongs to a single speaker.
+
+First, for all subplots for both the Per_Speaker_Overall_Chart and Per_Speaker_Per_Bucket_Chart, add in a vertical dotted line at each x-axis timepoint where audio changes from one speaker to another, and set the color of this line to correspond to the color of the speaker that the audio is changing to. For the Per_Speaker_Overall_Chart, the color of the plotted line for each subplot should also change color to correspond to the speaker whenever a speaker change occurs. Additionally, add a written label of each speaker_id for each audio sub-sequence immediately below the subplot, with this speaker_id label located at the half way point of the audio sub-sequence.
+
+Additionally, for both the Per_Speaker_Overall_Chart and Per_Speaker_Per_Bucket_Chart, instead of the saved chart file name containing voice_id followed by speaker_id, it should instead contain voice_id followed by the index of the current audio sequence within comparative_voices_audio_set, followed by a list of each of the sub-sequence speaker_ids. So, for example, if voice_id were set to "FCJF0", then the Per_Speaker_Overall_Chart file name for the second example entry in the above example comparative_voices_audio_set would end with "_element_match_overall_FCJF0_1_FCJF0_MEDR0_FCJF0_FECD0.png".
+
+For the Combined_Overall_Chart, the color of each plotted line should change color to correspond to each speaker whenever a speaker change occurs, just like for the Per_Speaker_Overall_Chart. However, the Combined_Overall_Chart should not have the vertical dotted lines or written speaker labels that the Per_Speaker_Overall_Chart does, since this would create too much overlapping visual noise across the multiple different plotted lines per subplot.
+
+Once this is done, I will try running some audio sequences that contain multiple speakers.
+
+
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to implement a new module called Simulated_Conversation_Generator. The purpose of this module is to generate sets of speaker <-> audio sequences that can be provided as the to the Run_Element_Match_Contribution_Type_Analysis() function in the Element_Match_Contribution_Type_Explorer module as its comparative_voices_audio_set input parameter. This generation process will be semi-random within a user-specified set of parametered constraints. To start, create a new file called Simulated_Conversation_Generator, and create a function within it called Generate_Simulated_Conversation_Set(). The Generate_Simulated_Conversation_Set() function should take the following user-provided input parameters:
+    1) conversation_count, which will be a positive integer
+    2) speaker_weights, which will be a dictionary<string, float> where each key is a speaker_id (for example, "FCJF0") and each value is a weight between 0 and 1
+    3) turn_duration_seeds, which will be a dictionary<string, float> that has as keys "base_duration", "deviation_ratio", "power_curve"
+    4) conversation_duration_seeds, which will be a dictionary<string, float> that has as keys "base_duration", "deviation_ratio", "power_curve"
+
+The purpose of Generate_Simulated_Conversation_Set() is to generate and a save a json file that contains an array that matches the format of the comparative_voices_audio_set input parameter to Run_Element_Match_Contribution_Type_Analysis(). So, for example, a particular Generate_Simulated_Conversation_Set() run might generate a json file containing the following:
+
+[
+    [("FCJF0", ["SA1", "SA2", "SI648", "SI1027", "SI1657", "SX37", "SX127", "SX217", "SX307", "SX397"])],
+    [("FCJF0", ["SA1", "SA2", "SI648"]), ("MEDR0", ["SI744", "SI1374", "SI2004"]), ("FCJF0", ["SI1027", "SI1657", "SX37"]) ("FECD0", ["SI2048", "SX68"])],
+]
+
+I will now walk through the logic used for this generation process. First, conversation_count indicates how many "conversations" (by which I mean sub-lists within the json top-level list) to generate. For the above example json, conversation_count would necessarily have been 2.
+
+For each conversation, the conversation_duration_seeds values govern the (approximate) total duration of all of the audios within the conversation. This total duration is determined semi-randomly, so each conversation will have a different duration. The logic for determining the duration of each conversation is as follows: 
+    1) base_duration_multiplier = ((([random number between 0 and 1] ^ conversation_duration_seed_power_curve) * (1 - conversation_duration_seed_deviation_ratio)) + conversation_duration_seed_deviation_ratio)
+    2) [Randomly generate another number between 0 and 1, and if this number is below 0.5 then set base_duration_multiplier to its own reciprocal]
+    3) conversation_duration = base_duration_multiplier * conversation_duration_seed_base_duration
+
+The conversation_duration value is then used as a total duration threshold for ending a conversation. As soon as the total duration of audio files selected for a conversation exceeds conversation duration, no further audio files should be selected for the conversation. Note that this conversation-level duration limit overrides the turn-level duration that will be described shortly, such that a turn can potentially be "cut off part way" to end a conversation.
+
+Each conversation consists of a series of (speaker_id, audio_file_list) turns that are generated iteratively until the conversation_duration is reached. For each new turn in a conversation, a speaker for the turn should be chosen through weighted random selection, where each speaker's weight is set within the speaker_weights input parameter. However, after the first turn in a conversation, each subsequent turn's speaker selection should exclude from the selection pool the speaker selected for the immediate prior turn.
+
+For each speaker turn, a total audio duration threshold for the turn is semi-randomly calculated using the same logic as the conversation duration thresholding, but using the turn_duration_seeds parameter values. Audio files are iteratively selected and added for the speaker turn until turn duration threshold is reached.
+
+To selection process for each audio file is to navigate to the speaker's audio folder within the phoneme corpus directory (the path of which is currently set for the PHONEME_CORPUS_DIRECTORY variable in Layered_Occurrence_Count_Populator.py. By the way, PHONEME_CORPUS_DIRECTORY should be moved to Global_Hyperparameters.py instead so that it can be referenced more universally), and then randomly select one of the audio files there. As one additional filter on this audio selection process, once an audio file is selected for a conversation it should be excluded from being reselected for the same conversation. However, if all available speaker audio files have already been selected for a given conversation, then the audio file selection filtering should be reset so that all speaker audios are back in the selectable pool.
+
+Once this json generation process is completed, the result should be saved to directory location "tmp/media/conversation_sequence_json". The name of the saved file should consist of the enumerated list of speaker_weights ordered by weight, followed by the base_duration value for conversation_duration_seeds. So, for example, if speaker_weights is set to {"MEDR0": 0.4, "FCJF0": 0.6} and conversation_duration_seeds base_duration is set to 15.0, then the resulting file name should be FCFJ0_0o6_MEDR0_0o4_15o0.json.
+
+Let me know if anything is unclear or ambiguous, otherwise implement the Simulated_Conversation_Generator module and then I will test it out.
+
+
+
