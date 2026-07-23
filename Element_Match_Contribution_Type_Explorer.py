@@ -430,7 +430,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
     voice_ids,
     conversation_json_file_name,
     aggregate_match_types,
-    cross_type_hyperparameters
+    cross_type_hyperparameters,
+    chart_type_inclusions
 ):
     comparative_voices_audio_set = Load_Comparative_Voices_Audio_Set(conversation_json_file_name)
 
@@ -443,6 +444,16 @@ def Run_Element_Match_Contribution_Type_Exploration(
     if not included_variants:
         print("Element_Match_Contribution_Type_Explorer: no variants included, aborting")
         return
+
+    include_combined_overall_chart = chart_type_inclusions.get("combined_overall", False)
+    include_all_speaker_overall_chart = chart_type_inclusions.get("all_speaker_overall", False)
+    include_per_speaker_overall_chart = chart_type_inclusions.get("per_speaker_overall", False)
+    include_per_speaker_per_bucket_chart = chart_type_inclusions.get("per_speaker_per_bucket", False)
+    if not (include_combined_overall_chart or include_all_speaker_overall_chart or include_per_speaker_overall_chart or include_per_speaker_per_bucket_chart):
+        print("Element_Match_Contribution_Type_Explorer: no chart types included, aborting")
+        return
+
+    need_per_voice_ylims = include_per_speaker_overall_chart or include_combined_overall_chart or include_per_speaker_per_bucket_chart
 
     include_weighted_binary_match_contribution = "weighted_binary_match_contribution" in included_variants
     include_occurrence_percentile_deviation = "occurrence_percentile_deviation" in included_variants
@@ -723,14 +734,14 @@ def Run_Element_Match_Contribution_Type_Exploration(
             inverted_occurrence_ratios, sorted_keys_per_bucket, bell_curve_projections, bucket_medians
         )
 
-        overall_ylims, per_bucket_ylims = _Compute_Global_Ylims(
-            included_variants, all_results, voiced_frequency_bucket_centers,
-            weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound,
-            accumulative_deviation_hyperparameters
-        )
+        if need_per_voice_ylims:
+            per_voice_ylims[voice_id] = _Compute_Global_Ylims(
+                included_variants, all_results, voiced_frequency_bucket_centers,
+                weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound,
+                accumulative_deviation_hyperparameters
+            )
 
         per_voice_results[voice_id] = all_results
-        per_voice_ylims[voice_id] = (overall_ylims, per_bucket_ylims)
         per_voice_voiced_frequency_bucket_centers[voice_id] = voiced_frequency_bucket_centers
 
     if not per_voice_results:
@@ -739,31 +750,38 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
     os.makedirs(Analysis_Directory, exist_ok=True)
 
-    for voice_id, all_results in per_voice_results.items():
-        overall_ylims, per_bucket_ylims = per_voice_ylims[voice_id]
-        voiced_frequency_bucket_centers = per_voice_voiced_frequency_bucket_centers[voice_id]
-        for sequence_index in range(len(comparative_voices_audio_set)):
-            Generate_Per_Speaker_Overall_Chart(voice_id, sequence_index, included_variants, overall_ylims, all_results[sequence_index])
-            Generate_Per_Speaker_Per_Bucket_Chart(voice_id, sequence_index, included_variants, per_bucket_ylims, all_results[sequence_index], voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound)
-        Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, all_results)
-
-    # a shared y-axis scale across every included voice_id keeps all overlaid lines on the new all-speaker chart visible and comparable, rather than reusing any single voice_id's own (potentially narrower) scale
-    combined_all_voices_results = {}
-    combined_index = 0
-    for all_results in per_voice_results.values():
-        for data in all_results.values():
-            combined_all_voices_results[combined_index] = data
-            combined_index += 1
-    all_speaker_overall_ylims, _ = _Compute_Global_Ylims(
-        included_variants, combined_all_voices_results, next(iter(per_voice_voiced_frequency_bucket_centers.values())),
-        weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound,
-        accumulative_deviation_hyperparameters
-    )
-
     successful_voice_ids = list(per_voice_results.keys())
-    reference_all_results = per_voice_results[successful_voice_ids[0]]
-    for sequence_index in range(len(comparative_voices_audio_set)):
-        speaker_segments = reference_all_results[sequence_index]["speaker_segments"]
-        Generate_All_Speaker_Overall_Chart(successful_voice_ids, sequence_index, included_variants, all_speaker_overall_ylims, per_voice_results, speaker_segments)
+
+    if include_per_speaker_overall_chart or include_per_speaker_per_bucket_chart or include_combined_overall_chart:
+        for voice_id, all_results in per_voice_results.items():
+            overall_ylims, per_bucket_ylims = per_voice_ylims[voice_id]
+            voiced_frequency_bucket_centers = per_voice_voiced_frequency_bucket_centers[voice_id]
+            if include_per_speaker_overall_chart or include_per_speaker_per_bucket_chart:
+                for sequence_index in range(len(comparative_voices_audio_set)):
+                    if include_per_speaker_overall_chart:
+                        Generate_Per_Speaker_Overall_Chart(voice_id, sequence_index, included_variants, overall_ylims, all_results[sequence_index])
+                    if include_per_speaker_per_bucket_chart:
+                        Generate_Per_Speaker_Per_Bucket_Chart(voice_id, sequence_index, included_variants, per_bucket_ylims, all_results[sequence_index], voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound)
+            if include_combined_overall_chart:
+                Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, all_results)
+
+    if include_all_speaker_overall_chart:
+        # a shared y-axis scale across every included voice_id keeps all overlaid lines on the all-speaker chart visible and comparable, rather than reusing any single voice_id's own (potentially narrower) scale
+        combined_all_voices_results = {}
+        combined_index = 0
+        for all_results in per_voice_results.values():
+            for data in all_results.values():
+                combined_all_voices_results[combined_index] = data
+                combined_index += 1
+        all_speaker_overall_ylims, _ = _Compute_Global_Ylims(
+            included_variants, combined_all_voices_results, next(iter(per_voice_voiced_frequency_bucket_centers.values())),
+            weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound,
+            accumulative_deviation_hyperparameters
+        )
+
+        reference_all_results = per_voice_results[successful_voice_ids[0]]
+        for sequence_index in range(len(comparative_voices_audio_set)):
+            speaker_segments = reference_all_results[sequence_index]["speaker_segments"]
+            Generate_All_Speaker_Overall_Chart(successful_voice_ids, sequence_index, included_variants, all_speaker_overall_ylims, per_voice_results, speaker_segments)
 
     print(f"Element_Match_Contribution_Type_Explorer: exploration complete for voice_ids {successful_voice_ids}")
