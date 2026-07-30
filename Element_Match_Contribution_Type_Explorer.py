@@ -26,7 +26,6 @@ VARIANT_ORDER = [
     "occurrence_percentile_deviation",
     "occurrence_percentile_inverse_deviation",
     "occurrence_percentile_half_distance",
-    "raw_distance",
     "accumulative_deviation",
 ]
 
@@ -35,7 +34,6 @@ _OVERALL_KEYS = {
     "occurrence_percentile_deviation": "average_occurrence_percentile_deviations",
     "occurrence_percentile_inverse_deviation": "average_occurrence_percentile_inverse_deviations",
     "occurrence_percentile_half_distance": "average_occurrence_percentile_half_distances",
-    "raw_distance": "average_raw_distances",
     "accumulative_deviation": "average_element_accumulative_deviations",
 }
 
@@ -44,7 +42,6 @@ _PER_BUCKET_KEYS = {
     "occurrence_percentile_deviation": "occurrence_percentile_deviations",
     "occurrence_percentile_inverse_deviation": "occurrence_percentile_inverse_deviations",
     "occurrence_percentile_half_distance": "occurrence_percentile_half_distances",
-    "raw_distance": "cumulative_raw_distances",
     "accumulative_deviation": "element_accumulative_deviations",
 }
 
@@ -114,19 +111,22 @@ def _Weighted_Binary_Match_Contribution_Weight(new_ratio, lower_bound, upper_bou
 
 
 def _Occurrence_Percentile_Deviation(new_ratio):
-    return 1.0 - (abs(0.5 - new_ratio) * 2.0)
+    return abs(0.5 - new_ratio) * 2.0
 
 
 def _Occurrence_Percentile_Inverse_Deviation(deviation, power_curve, minimum):
-    if deviation <= 0.0:
+    # deviation is 0 at a perfect match and 1 at the worst match; closeness restores the inverse (1 = perfect) scale these formulas are written against
+    closeness = 1.0 - deviation
+    if closeness <= 0.0:
         return minimum
-    return max((-1.0 / (deviation ** power_curve)) + 1.0, minimum)
+    return max((-1.0 / (closeness ** power_curve)) + 1.0, minimum)
 
 
 def _Occurrence_Percentile_Half_Distance(deviation, minimum):
-    if deviation <= 0.0:
+    closeness = 1.0 - deviation
+    if closeness <= 0.0:
         return minimum
-    return max(-1.0 * (math.log(deviation) / _LOG_0_5), minimum)
+    return max(-1.0 * (math.log(closeness) / _LOG_0_5), minimum)
 
 
 # --- global bounds computation ---
@@ -136,7 +136,7 @@ def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucke
     per_bucket_ylims = {}
 
     for variant in included_variants:
-        if variant in ("weighted_binary_match_contribution", "occurrence_percentile_deviation"):
+        if variant == "weighted_binary_match_contribution":
             overall_ylims[variant] = (0.0, 1.0)
         else:
             key = _OVERALL_KEYS[variant]
@@ -148,9 +148,7 @@ def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucke
             overall_ylims[variant] = (global_minimum, 0.0)
 
     for variant in included_variants:
-        if variant == "occurrence_percentile_deviation":
-            per_bucket_ylims[variant] = (0.0, 1.0)
-        elif variant == "weighted_binary_match_contribution":
+        if variant == "weighted_binary_match_contribution":
             absolute_maximum = 0.0
             weights_key = _PER_BUCKET_KEYS["weighted_binary_match_contribution"]
             cumulative_comparative_occurrence_ratios_key = "cumulative_comparative_occurrence_ratios"
@@ -459,7 +457,6 @@ def Run_Element_Match_Contribution_Type_Exploration(
     include_occurrence_percentile_deviation = "occurrence_percentile_deviation" in included_variants
     include_occurrence_percentile_inverse_deviation = "occurrence_percentile_inverse_deviation" in included_variants
     include_occurrence_percentile_half_distance = "occurrence_percentile_half_distance" in included_variants
-    include_raw_distance = "raw_distance" in included_variants
     include_accumulative_deviation = "accumulative_deviation" in included_variants
     need_cumulative_comparative_occurrence_ratios = (
         include_weighted_binary_match_contribution or include_occurrence_percentile_deviation
@@ -484,6 +481,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
     accumulative_deviation_deviation_type = None
     accumulative_deviation_use_non_directional_element_deviations = False
     accumulative_deviation_use_average_element_deviations = False
+    accumulative_deviation_use_self_tracking_reset = False
     if include_accumulative_deviation:
         accumulative_deviation_decay_rate = Convert_Half_Life_To_Cumulation_Weight(
             Spectrogram_Window_Jump_In_Seconds, accumulative_deviation_hyperparameters["decay_half_life"]
@@ -491,15 +489,10 @@ def Run_Element_Match_Contribution_Type_Exploration(
         accumulative_deviation_deviation_type = accumulative_deviation_hyperparameters["deviation_type"]
         accumulative_deviation_use_non_directional_element_deviations = accumulative_deviation_hyperparameters["use_non_directional_element_deviations"]
         accumulative_deviation_use_average_element_deviations = accumulative_deviation_hyperparameters["use_average_element_deviations"]
+        accumulative_deviation_use_self_tracking_reset = accumulative_deviation_hyperparameters["use_self_tracking_reset"]
 
-    need_percentile_deviation_for_accumulative_deviation = include_accumulative_deviation and accumulative_deviation_deviation_type in (
-        "occurrence_percentile_inverse_deviation", "occurrence_percentile_half_distance"
-    )
-    need_bucket_medians = include_raw_distance or (
-        include_accumulative_deviation and (
-            accumulative_deviation_deviation_type == "raw_distance" or not accumulative_deviation_use_non_directional_element_deviations
-        )
-    )
+    need_percentile_deviation_for_accumulative_deviation = include_accumulative_deviation
+    need_bucket_medians = include_accumulative_deviation and not accumulative_deviation_use_non_directional_element_deviations
 
     voice_profile_half_life = cross_type_hyperparameters.get("voice_profile_cumulation_half_life")
 
@@ -519,21 +512,18 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
         for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set):
             cumulative_comparative_occurrence_ratios = {freq: [0.5] for freq in voiced_frequency_bucket_centers} if need_cumulative_comparative_occurrence_ratios else {}
-            cumulative_raw_distances = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_raw_distance else {}
 
             match_contribution_weights = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_weighted_binary_match_contribution else {}
             weighted_binary_match_contributions = [0.5] if include_weighted_binary_match_contribution else []
 
-            occurrence_percentile_deviations = {freq: [1.0] for freq in voiced_frequency_bucket_centers} if need_occurrence_percentile_deviation_buckets else {}
-            average_occurrence_percentile_deviations = [1.0] if include_occurrence_percentile_deviation else []
+            occurrence_percentile_deviations = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if need_occurrence_percentile_deviation_buckets else {}
+            average_occurrence_percentile_deviations = [0.0] if include_occurrence_percentile_deviation else []
 
             occurrence_percentile_inverse_deviations = {freq: [-1.0] for freq in voiced_frequency_bucket_centers} if include_occurrence_percentile_inverse_deviation else {}
             average_occurrence_percentile_inverse_deviations = [-1.0] if include_occurrence_percentile_inverse_deviation else []
 
             occurrence_percentile_half_distances = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_occurrence_percentile_half_distance else {}
             average_occurrence_percentile_half_distances = [0.0] if include_occurrence_percentile_half_distance else []
-
-            average_raw_distances = [0.0] if include_raw_distance else []
 
             element_accumulative_deviations = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_accumulative_deviation else {}
             average_element_accumulative_deviations = [0.0] if include_accumulative_deviation else []
@@ -543,6 +533,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
             for speaker_id, audio_list in sub_sequences:
                 segment_start_index = processed_timepoint_count + 1
+                # the very first valid timepoint of a turn where the speaker is the voice_id itself resets accumulative_deviation tracking to 0, rather than continuing from wherever it left off
+                pending_accumulative_deviation_reset = include_accumulative_deviation and accumulative_deviation_use_self_tracking_reset and speaker_id == voice_id
 
                 for audio_name in audio_list:
                     distribution, timepoint_phonemes = audio_cache[(speaker_id, audio_name)]
@@ -559,7 +551,6 @@ def Run_Element_Match_Contribution_Type_Exploration(
                         timepoint_occurrence_percentile_deviations = []
                         timepoint_occurrence_percentile_inverse_deviations = []
                         timepoint_occurrence_percentile_half_distances = []
-                        timepoint_raw_distances = []
                         timepoint_element_accumulative_deviations = []
 
                         for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
@@ -589,8 +580,10 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
                             if need_occurrence_percentile_deviation_buckets:
                                 deviation = _Occurrence_Percentile_Deviation(new_ratio)
-                                occurrence_percentile_deviations[freq_center].append(deviation)
-                                timepoint_occurrence_percentile_deviations.append(deviation)
+                                # occurrence_percentile_deviation's own reported/charted value is negated (0 = best, -1 = worst) to match the "zero is best" y-axis convention of the other occurrence_percentile_* charts; the un-negated deviation is still fed to inverse_deviation/half_distance below, which expect the original 0-to-1 scale
+                                negated_deviation = -1.0 * deviation
+                                occurrence_percentile_deviations[freq_center].append(negated_deviation)
+                                timepoint_occurrence_percentile_deviations.append(negated_deviation)
 
                                 if include_occurrence_percentile_inverse_deviation:
                                     inverse_deviation = _Occurrence_Percentile_Inverse_Deviation(deviation, occurrence_percentile_inverse_deviation_hyperparameters["deviation_power_curve"], occurrence_percentile_inverse_deviation_hyperparameters["inverse_deviation_minimum"])
@@ -602,35 +595,28 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                     occurrence_percentile_half_distances[freq_center].append(half_distance)
                                     timepoint_occurrence_percentile_half_distances.append(half_distance)
 
-                            if include_raw_distance:
-                                raw_distance_value_2 = -1.0 * abs(bucket_medians[freq_index] - timepoint_ratio)
-                                previous_raw_distance = cumulative_raw_distances[freq_center][-1]
-                                new_raw_distance = Weighted_Average(previous_raw_distance, occurrence_ratio_cumulation_weight, raw_distance_value_2, 1.0 - occurrence_ratio_cumulation_weight)
-                                cumulative_raw_distances[freq_center].append(new_raw_distance)
-                                timepoint_raw_distances.append(new_raw_distance)
-
                             if include_accumulative_deviation:
-                                if accumulative_deviation_deviation_type == "raw_distance":
-                                    current_timepoint_deviation = -1.0 * abs(bucket_medians[freq_index] - timepoint_ratio)
+                                current_timepoint_percentile_deviation = _Occurrence_Percentile_Deviation(value_2)
+                                if accumulative_deviation_deviation_type == "occurrence_percentile_inverse_deviation":
+                                    current_timepoint_deviation = _Occurrence_Percentile_Inverse_Deviation(
+                                        current_timepoint_percentile_deviation,
+                                        occurrence_percentile_inverse_deviation_hyperparameters["deviation_power_curve"],
+                                        occurrence_percentile_inverse_deviation_hyperparameters["inverse_deviation_minimum"]
+                                    )
+                                elif accumulative_deviation_deviation_type == "occurrence_percentile_half_distance":
+                                    current_timepoint_deviation = _Occurrence_Percentile_Half_Distance(
+                                        current_timepoint_percentile_deviation,
+                                        occurrence_percentile_half_distance_hyperparameters["half_distance_minimum"]
+                                    )
                                 else:
-                                    current_timepoint_percentile_deviation = _Occurrence_Percentile_Deviation(value_2)
-                                    if accumulative_deviation_deviation_type == "occurrence_percentile_inverse_deviation":
-                                        current_timepoint_deviation = _Occurrence_Percentile_Inverse_Deviation(
-                                            current_timepoint_percentile_deviation,
-                                            occurrence_percentile_inverse_deviation_hyperparameters["deviation_power_curve"],
-                                            occurrence_percentile_inverse_deviation_hyperparameters["inverse_deviation_minimum"]
-                                        )
-                                    else:
-                                        current_timepoint_deviation = _Occurrence_Percentile_Half_Distance(
-                                            current_timepoint_percentile_deviation,
-                                            occurrence_percentile_half_distance_hyperparameters["half_distance_minimum"]
-                                        )
+                                    # occurrence_percentile_deviation is 0 at a perfect match and grows toward 1 at the worst match; negate so it matches every other deviation_type's 0-is-best, negative-is-worse convention
+                                    current_timepoint_deviation = -1.0 * current_timepoint_percentile_deviation
 
                                 if not accumulative_deviation_use_non_directional_element_deviations:
                                     if timepoint_ratio < bucket_medians[freq_index]:
                                         current_timepoint_deviation *= -1.0
 
-                                previous_element_accumulative_deviation = element_accumulative_deviations[freq_center][-1]
+                                previous_element_accumulative_deviation = 0.0 if pending_accumulative_deviation_reset else element_accumulative_deviations[freq_center][-1]
                                 if accumulative_deviation_use_average_element_deviations:
                                     new_element_accumulative_deviation = Weighted_Average(
                                         previous_element_accumulative_deviation, accumulative_deviation_decay_rate,
@@ -642,6 +628,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                 element_accumulative_deviations[freq_center].append(new_element_accumulative_deviation)
                                 timepoint_element_accumulative_deviations.append(new_element_accumulative_deviation)
 
+                        pending_accumulative_deviation_reset = False
+
                         if include_weighted_binary_match_contribution:
                             total_weight = sum(timepoint_weighted_binary_match_contribution_weights)
                             if total_weight == 0.0:
@@ -652,16 +640,13 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                 )
 
                         if include_occurrence_percentile_deviation:
-                            average_occurrence_percentile_deviations.append(sum(timepoint_occurrence_percentile_deviations) / len(timepoint_occurrence_percentile_deviations) if timepoint_occurrence_percentile_deviations else 1.0)
+                            average_occurrence_percentile_deviations.append(sum(timepoint_occurrence_percentile_deviations) / len(timepoint_occurrence_percentile_deviations) if timepoint_occurrence_percentile_deviations else 0.0)
 
                         if include_occurrence_percentile_inverse_deviation:
                             average_occurrence_percentile_inverse_deviations.append(sum(timepoint_occurrence_percentile_inverse_deviations) / len(timepoint_occurrence_percentile_inverse_deviations) if timepoint_occurrence_percentile_inverse_deviations else -1.0)
 
                         if include_occurrence_percentile_half_distance:
                             average_occurrence_percentile_half_distances.append(sum(timepoint_occurrence_percentile_half_distances) / len(timepoint_occurrence_percentile_half_distances) if timepoint_occurrence_percentile_half_distances else 0.0)
-
-                        if include_raw_distance:
-                            average_raw_distances.append(sum(timepoint_raw_distances) / len(timepoint_raw_distances) if timepoint_raw_distances else 0.0)
 
                         if include_accumulative_deviation:
                             average_element_accumulative_deviations.append(
@@ -690,9 +675,6 @@ def Run_Element_Match_Contribution_Type_Exploration(
             if include_occurrence_percentile_half_distance:
                 speaker_data["occurrence_percentile_half_distances"] = occurrence_percentile_half_distances
                 speaker_data["average_occurrence_percentile_half_distances"] = average_occurrence_percentile_half_distances
-            if include_raw_distance:
-                speaker_data["cumulative_raw_distances"] = cumulative_raw_distances
-                speaker_data["average_raw_distances"] = average_raw_distances
             if include_accumulative_deviation:
                 speaker_data["element_accumulative_deviations"] = element_accumulative_deviations
                 speaker_data["average_element_accumulative_deviations"] = average_element_accumulative_deviations

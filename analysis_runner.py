@@ -121,17 +121,14 @@ def Run_Element_Match_Contribution_Type_Analysis():
                     "half_distance_minimum": -10.0
                 }
             },
-            "raw_distance": {
-                "include_variant": False,
-                "hyperparameters": {}
-            },
             "accumulative_deviation":{
                 "include_variant": True,
                 "hyperparameters": {
-                    "decay_half_life": 1.0,
+                    "decay_half_life": 100.0,
                     "use_non_directional_element_deviations": False,
-                    "use_average_element_deviations": False,
-                    "deviation_type": "occurrence_percentile_inverse_deviation"
+                    "use_average_element_deviations": True,
+                    "deviation_type": "occurrence_percentile_deviation",
+                    "use_self_tracking_reset": True
                 }
             }
         },

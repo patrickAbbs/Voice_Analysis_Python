@@ -588,6 +588,122 @@ Also, there are two minor modifications to subplot line visualization logic that
 
 Let me know if anything is unclear or ambiguous, or if I am missing anything that this refactor would need to account for. Otherwise, implement the refactor and then I will test it out.
 
+--------------------------
+
+I would also like you to add a new dictionary<string, boolean> input parameter "chart_type_inclusions" to Run_Element_Match_Contribution_Type_Exploration(), with keys (along with example values) as follows:
+
+{
+    "combined_overall": False
+    "all_speaker_overall": True,
+    "per_speaker_overall": False,
+    "per_speaker_per_bucket": False,
+}
+
+Each dictionary key corresponds to one of the 4 chart types (let me know if it is not clear which one corresponds to which), and if a key's value is set to false then that chart type should not be generated (and its chart-specific logic should not be performed) for the Run_Element_Match_Contribution_Type_Exploration() call.
+
+
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to implement a refactor to the way that the logic for calculating per-frequency-bucket timepoint deviation values works in the core nested loop of _Process_Sequences_For_Voice() in the Element_Match_Contribution_Type_Explorer module. As a quick note before diving in, I would also like you to remove / delete the currently implemented raw_distance aggregate match type from Element_Match_Contribution_Type_Explorer. Any logic specific to this match type should be removed, as well as the logic within accumulative_deviation the match type that has raw_distance as an option. Going forward, I will ignore raw_distance in my description of the broader refactor since it is removed and so no longer a consideration.
+
+If I understand the requirements of the per-frequency-bucket timepoint deviation refactor correctly, it will impact the all of the currently implemented aggregate_match_types, but it will not actually change any of the individual-match_type-specific logic except for that of accumulative_deviation. It also should not impact any of the chart plotting logic.
+
+The first part of the refactor is that all of the per-timepoint value lists initialized right at the beginning of the  "for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set)" loop should no longer be initialized with a first element value already populated. All of these lists should instead be initialized as empty. Additionally, a new dictionary<frequency_bucket, float> variable "distribution_ratio_signal_rates" should be initialized right at the beginning of that for loop, which has all of its float values initialized to 0.
+
+distribution_ratio_signal_rates is updated for each frequency_bucket at each timepoint (including the first). Its updated value is calculated by calling the Weighted_Average() function, with input values to the function being:
+    1) value_1 is the current distribution_ratio_signal_rates value for the frequency_bucket
+    2) value_2 is timepoint_ratio
+    3) weight_1 is occurrence_ratio_cumulation_weight
+    4) weight_2 is (1.0 - occurrence_ratio_cumulation_weight)
+
+Next, the current logic for calculating value_2 and new_ratio should change as follows:
+    1) Instead of using timepoint_ratio for the _Bell_Curve_Value_2() and _Lookup_Closest_Value() calls, instead a new variable "signal_rate_ratio" should be used that is calculated as the timepoint-updated distribution_ratio_signal_rate value for the frequency_bucket divided by the sum of all timepoint-updated distribution_ratio_signal_rates. Note that this means all frequency_bucket distribution_ratio_signal_rate values should be updated for a timepoint before any of the frequency_buckets perform these calls.
+    2) new_ratio is set directly to the output of these calls, instead of having value_2 be calculated as an intermediary value that is then incorporated into weighted averaging to calculate a new_ratio. This means that value_2 should no longer be calculated at all.
+    3) new_ratio should still be appended to cumulative_comparative_occurrence_ratios as currently implemented.
+
+From there, I tentatively think that the rest of the current logic for all of the aggregate_match_types except for accumulative_deviation can remain as is with no changes. If I am missing something and there are further downstream impacts that are not accounted for, let me know.
+
+Finally, the current logic for accumulative_deviation should change as follows:
+    1) current_timepoint_percentile_deviation calculation replaces value_2 with new_ratio
+    2) The "if timepoint_ratio < bucket_medians[freq_index]" condition replaces timepoint_ratio with new_ratio
+    3) If it is the first timepoint and so element_accumulative_deviations[freq_center] has no values yet, then previous_element_accumulative_deviation is set to 0
+
+Let me know if anything is unclear or ambiguous, or if I am missing anything that this refactor would need to account for. Otherwise, implement the refactor and then I will test it out.
+
+
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to implement an extension to the Element_Match_Contribution_Type_Explorer module that will optionally change some of the processing logic for the accumulative_deviation aggregate_match_type variant. Add a new Boolean hyperparameter "use_self_tracking_reset" to the aggregate_match_types sub-dictionary for accumulative_deviation. When this is set to False, the accumulative_deviation logic should be as currently implemented. 
+
+When use_self_tracking_reset is set to True, previous_element_accumulative_deviation should be set to 0 instead of the prior timepoint element_accumulative_deviation value whenever there is a change in audio speaker such that the new speaker corresponds to the voice_id being compared to. So, for example, if _Process_Sequences_For_Voice() is being run for voice_id "FCJF0" and for a comparative_voices_audio_set that contains speaker sub-sequences ["MGRL0", "FCJF0", "MCPM0", "MGRL0", "FCJF0"], then previous_element_accumulative_deviation should be set to 0 (which in turn effectively resets accumulative_deviation tracking to 0) for the first timepoint of the first audio for each of the "FCJF0" sub-sequences.
+
+Separately, I would also like you to remove / delete the currently implemented raw_distance aggregate match type from Element_Match_Contribution_Type_Explorer. Any logic specific to this match type should be removed, as well as the logic within accumulative_deviation the match type that has raw_distance as an option.
+
+--------------------------
+
+Next, I would also like you to implement a partial, and optional, version of the per-frequency-bucket timepoint deviation calculation logic refactor that was implemented and then reverted a few days ago. This time, instead of replacing the current logic with the new logic, the both versions of the logic should be implemented. Additionally, this time (to start with at least) the optional alternative logic path should not impact the accumulative_deviation aggregate_match_type (though it will impact all others), so any variables or values that are needed for accumulative_deviation should still be calculable even if the new alternative logic is being used. A new Boolean hyperparameter "use_signal_rate_simulation" should be added to cross_type_hyperparameters. When this is set to False, all logic should run as currently implemented. When set to True, the following logic changes should be used instead.
+
+First, at the very beginning of the _Process_Sequences_For_Voice a float variable total_distribution_signal_rate should be initialized to 0. Then, a new dictionary<frequency_bucket, float> variable "distribution_ratio_signal_rates" should be initialized right at the beginning of the "for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set)" loop, which has all of its float values initialized to 0.
+
+total_distribution_signal_rate is updated for each timepoint (including the first). Its updated value is calculated by calling the Weighted_Average() function, with input values to the function being:
+    1) value_1 is the current total_distribution_signal_rate value 
+    2) value_2 is 1.0
+    3) weight_1 is occurrence_ratio_cumulation_weight
+    4) weight_2 is (1.0 - occurrence_ratio_cumulation_weight)
+
+distribution_ratio_signal_rates is also updated for each frequency_bucket at each timepoint (including the first). Its updated value is calculated by calling the Weighted_Average() function, with input values to the function being:
+    1) value_1 is the current distribution_ratio_signal_rates value for the frequency_bucket
+    2) value_2 is timepoint_ratio
+    3) weight_1 is occurrence_ratio_cumulation_weight
+    4) weight_2 is (1.0 - occurrence_ratio_cumulation_weight)
+
+Next, the logic used to calculate the new value to append to cumulative_comparative_occurrence_ratios for each frequency_bucket at each timepoint should change as follows:
+    1) Instead of using timepoint_ratio for the _Bell_Curve_Value_2() or _Lookup_Closest_Value() call, instead a new variable "signal_rate_ratio" should be used that is calculated as the timepoint-updated distribution_ratio_signal_rate value for the frequency_bucket divided by the timepoint-updated total_distributional_signal_rate. Note that this means total_distributional_signal_rate should be updated for a timepoint before any of the frequency_buckets perform these calls.
+    2) cumulative_comparative_occurrence_ratios directly appends the output of this _Bell_Curve_Value_2() or _Lookup_Closest_Value() call instead of using the output value as the input to another subsequent Weighted_Average() call.
+
+After you finish I will do some test runs and look at the results. Depending how they look, I may then expand the alternative logic path to include changes to accumulative_deviation logic as well.
+
+
+
+
+
+
+
+
+
+
+Next, I would also like you to implement a partial, and optional, version of the per-frequency-bucket timepoint deviation calculation logic refactor that was implemented and then reverted a few days ago. This time, instead of replacing the current logic with the new logic, the both versions of the logic should be implemented. Additionally, this time (to start with at least) the optional alternative logic path should not impact the accumulative_deviation aggregate_match_type (though it will impact all others), so any variables or values that are needed for accumulative_deviation should still be calculable even if the new alternative logic is being used. A new Boolean hyperparameter "use_signal_rate_simulation" should be added to cross_type_hyperparameters. When this is set to False, all logic should run as currently implemented. When set to True, the following logic changes should be used instead.
+
+First, at the very beginning of the _Process_Sequences_For_Voice a float variable total_distribution_signal_rate should be initialized to 0. Then, a new dictionary<frequency_bucket, float> variable "distribution_ratio_signal_rates" should be initialized right at the beginning of the "for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set)" loop, which has all of its float values initialized to 0.
+
+total_distribution_signal_rate is updated for each timepoint (including the first). Its updated value is calculated by calling the Weighted_Average() function, with input values to the function being:
+    1) value_1 is the current total_distribution_signal_rate value 
+    2) value_2 is 1.0
+    3) weight_1 is occurrence_ratio_cumulation_weight
+    4) weight_2 is (1.0 - occurrence_ratio_cumulation_weight)
+
+distribution_ratio_signal_rates is also updated for each frequency_bucket at each timepoint (including the first). Its updated value is calculated by calling the Weighted_Average() function, with input values to the function being:
+    1) value_1 is the current distribution_ratio_signal_rates value for the frequency_bucket
+    2) value_2 is timepoint_ratio
+    3) weight_1 is occurrence_ratio_cumulation_weight
+    4) weight_2 is (1.0 - occurrence_ratio_cumulation_weight)
+
+Next, the logic used to calculate the new value to append to cumulative_comparative_occurrence_ratios for each frequency_bucket at each timepoint should change (when use_signal_rate_simulation is True) as follows:
+    1) Instead of using timepoint_ratio for the _Bell_Curve_Value_2() or _Lookup_Closest_Value() call, instead a new variable "signal_rate_ratio" should be used that is calculated as the timepoint-updated distribution_ratio_signal_rate value for the frequency_bucket divided by the timepoint-updated total_distributional_signal_rate. Note that this means total_distributional_signal_rate should be updated for a timepoint before any of the frequency_buckets perform these calls.
+    2) new_ratio is set directly to the output of these calls, instead of having value_2 be calculated as an intermediary value that is then incorporated into weighted averaging to calculate a new_ratio. This means that value_2 should no longer be calculated at all.
+    3) new_ratio should still be appended to cumulative_comparative_occurrence_ratios as currently implemented.
+
+Finally, the current logic for accumulative_deviation should change as follows:
+    1) current_timepoint_percentile_deviation calculation replaces value_2 with new_ratio
+    2) The "if timepoint_ratio < bucket_medians[freq_index]" condition is replaced with the condition "if new_ratio < 0.5"
+
+Let me know if anything is unclear or ambiguous, or if I am missing anything that this optional alternative logic path would need to account for. Otherwise, implement the new logic path and then I will test it out.
+
+
+
+
 
 
 
