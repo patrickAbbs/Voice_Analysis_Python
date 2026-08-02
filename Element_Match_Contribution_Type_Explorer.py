@@ -437,6 +437,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
         Spectrogram_Window_Jump_In_Seconds, cross_type_hyperparameters["occurrence_ratio_cumulation_half_life"]
     )
     use_bell_curve = cross_type_hyperparameters.get("use_bell_curve_percentile_projection", False)
+    use_signal_rate_simulation = cross_type_hyperparameters.get("use_signal_rate_simulation", False)
 
     included_variants = [variant for variant in VARIANT_ORDER if aggregate_match_types.get(variant, {}).get("include_variant", False)]
     if not included_variants:
@@ -509,9 +510,11 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
     def _Process_Sequences_For_Voice(voiced_frequency_bucket_centers, voiced_frequency_limit_index, inverted_occurrence_ratios, sorted_keys_per_bucket, bell_curve_projections, bucket_medians):
         all_results = {}
+        total_distribution_signal_rate = 0.0
 
         for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set):
             cumulative_comparative_occurrence_ratios = {freq: [0.5] for freq in voiced_frequency_bucket_centers} if need_cumulative_comparative_occurrence_ratios else {}
+            distribution_ratio_signal_rates = {freq: 0.0 for freq in voiced_frequency_bucket_centers}
 
             match_contribution_weights = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_weighted_binary_match_contribution else {}
             weighted_binary_match_contributions = [0.5] if include_weighted_binary_match_contribution else []
@@ -553,24 +556,49 @@ def Run_Element_Match_Contribution_Type_Exploration(
                         timepoint_occurrence_percentile_half_distances = []
                         timepoint_element_accumulative_deviations = []
 
+                        if use_signal_rate_simulation:
+                            # total_distribution_signal_rate and every bucket's distribution_ratio_signal_rates must be updated for this timepoint before any bucket below can compute its signal_rate_ratio
+                            total_distribution_signal_rate = Weighted_Average(total_distribution_signal_rate, occurrence_ratio_cumulation_weight, 1.0, 1.0 - occurrence_ratio_cumulation_weight)
+                            for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
+                                signal_rate_timepoint_ratio = float(distribution[freq_index][timepoint_index])
+                                distribution_ratio_signal_rates[freq_center] = Weighted_Average(
+                                    distribution_ratio_signal_rates[freq_center], occurrence_ratio_cumulation_weight,
+                                    signal_rate_timepoint_ratio, 1.0 - occurrence_ratio_cumulation_weight
+                                )
+
                         for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
                             timepoint_ratio = float(distribution[freq_index][timepoint_index])
 
                             if need_cumulative_comparative_occurrence_ratios or need_percentile_deviation_for_accumulative_deviation:
-                                if use_bell_curve:
-                                    center, lower_standard_deviation, upper_standard_deviation = bell_curve_projections[freq_index]
-                                    value_2 = _Bell_Curve_Value_2(timepoint_ratio, center, lower_standard_deviation, upper_standard_deviation)
-                                else:
-                                    value_2 = _Lookup_Closest_Value(
-                                        inverted_occurrence_ratios[freq_index],
-                                        sorted_keys_per_bucket[freq_index],
-                                        timepoint_ratio
-                                    )
+                                if use_signal_rate_simulation:
+                                    signal_rate_ratio = distribution_ratio_signal_rates[freq_center] / total_distribution_signal_rate
+                                    if use_bell_curve:
+                                        center, lower_standard_deviation, upper_standard_deviation = bell_curve_projections[freq_index]
+                                        new_ratio = _Bell_Curve_Value_2(signal_rate_ratio, center, lower_standard_deviation, upper_standard_deviation)
+                                    else:
+                                        new_ratio = _Lookup_Closest_Value(
+                                            inverted_occurrence_ratios[freq_index],
+                                            sorted_keys_per_bucket[freq_index],
+                                            signal_rate_ratio
+                                        )
 
-                                if need_cumulative_comparative_occurrence_ratios:
-                                    previous_ratio = cumulative_comparative_occurrence_ratios[freq_center][-1]
-                                    new_ratio = Weighted_Average(previous_ratio, occurrence_ratio_cumulation_weight, value_2, 1.0 - occurrence_ratio_cumulation_weight)
-                                    cumulative_comparative_occurrence_ratios[freq_center].append(new_ratio)
+                                    if need_cumulative_comparative_occurrence_ratios:
+                                        cumulative_comparative_occurrence_ratios[freq_center].append(new_ratio)
+                                else:
+                                    if use_bell_curve:
+                                        center, lower_standard_deviation, upper_standard_deviation = bell_curve_projections[freq_index]
+                                        value_2 = _Bell_Curve_Value_2(timepoint_ratio, center, lower_standard_deviation, upper_standard_deviation)
+                                    else:
+                                        value_2 = _Lookup_Closest_Value(
+                                            inverted_occurrence_ratios[freq_index],
+                                            sorted_keys_per_bucket[freq_index],
+                                            timepoint_ratio
+                                        )
+
+                                    if need_cumulative_comparative_occurrence_ratios:
+                                        previous_ratio = cumulative_comparative_occurrence_ratios[freq_center][-1]
+                                        new_ratio = Weighted_Average(previous_ratio, occurrence_ratio_cumulation_weight, value_2, 1.0 - occurrence_ratio_cumulation_weight)
+                                        cumulative_comparative_occurrence_ratios[freq_center].append(new_ratio)
 
                             if include_weighted_binary_match_contribution:
                                 weight = _Weighted_Binary_Match_Contribution_Weight(new_ratio, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound, positive_contribution_range, weighted_binary_match_contribution_positive_weight_power_curve, weighted_binary_match_contribution_negative_weight_proximity_half_distance_increment)
@@ -596,7 +624,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                     timepoint_occurrence_percentile_half_distances.append(half_distance)
 
                             if include_accumulative_deviation:
-                                current_timepoint_percentile_deviation = _Occurrence_Percentile_Deviation(value_2)
+                                current_timepoint_percentile_deviation = _Occurrence_Percentile_Deviation(new_ratio if use_signal_rate_simulation else value_2)
                                 if accumulative_deviation_deviation_type == "occurrence_percentile_inverse_deviation":
                                     current_timepoint_deviation = _Occurrence_Percentile_Inverse_Deviation(
                                         current_timepoint_percentile_deviation,
@@ -613,7 +641,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                     current_timepoint_deviation = -1.0 * current_timepoint_percentile_deviation
 
                                 if not accumulative_deviation_use_non_directional_element_deviations:
-                                    if timepoint_ratio < bucket_medians[freq_index]:
+                                    if (new_ratio < 0.5) if use_signal_rate_simulation else (timepoint_ratio < bucket_medians[freq_index]):
                                         current_timepoint_deviation *= -1.0
 
                                 previous_element_accumulative_deviation = 0.0 if pending_accumulative_deviation_reset else element_accumulative_deviations[freq_center][-1]
