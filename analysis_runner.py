@@ -43,8 +43,14 @@ Conversational_Layered_Subdistribution_Audio_Set = [
     [("MGRL0", ["SA1", "SA2", "SI867", "SI1497", "SI2127", "SX57", "SX147", "SX237", "SX327", "SX417"])]
 ]
 
+
+#Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
 #Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
-Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
+Conversational_Speaker_Audio_Set_File_Name = "FDML0_0o4_MEDR0_0o3_MGRL0_0o2_MDAC0_0o1_50o0.json"
+
+#Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0"]
+#Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0"]
+Conversational_Tracked_Voice_List = ["FDML0", "MEDR0", "MGRL0", "MDAC0"]
 
 New_Partial_Speaker_Audio_Set = {
     "FJSP0": ["SA1", "SA2", "SI804", "SI1434", "SI1763", "SX84", "SX174", "SX264"],
@@ -94,7 +100,7 @@ def Run_Voice_Subdistribution_Deviation_Analysis():
     Run_Voice_Subdistribution_Deviation_Tracking("FECD0", Layered_Subdistribution_Audio_Set, 0.9875, 0.3)
 
 def Run_Element_Match_Contribution_Type_Analysis():
-    Run_Element_Match_Contribution_Type_Exploration(["FCJF0", "MCPM0", "FDML0"], Conversational_Speaker_Audio_Set_File_Name,
+    Run_Element_Match_Contribution_Type_Exploration(Conversational_Tracked_Voice_List, Conversational_Speaker_Audio_Set_File_Name,
         aggregate_match_types={
             "weighted_binary_match_contribution": {
                 "include_variant": True,
@@ -163,8 +169,9 @@ def Run_Visualize_Occurrence_Ratio_Percentile_Shapes():
     Visualize_Occurrence_Ratio_Percentile_Shapes(["FCJF0", "MEDR0", "MCPM0", "FDAW0", "FDML0", "MDAC0", "FECD0", "MDPK0"], 
                                                  proximity_density_distance=0.0008, voice_profile_cumulation_half_life=0.2)
 
+#All_Speakers = ["FCJF0", "MEDR0", "MCPM0", "FDAW0", "FDML0", "MDAC0", "FECD0", "MDPK0", "FJSP0", "MGRL0"]
 def Generate_Conversation():
-    Generate_Simulated_Conversation_Set(4, {"FCJF0": 0.4, "MCPM0": 0.3, "FDML0": 0.2, "MGRL0": 0.1}, 
+    Generate_Simulated_Conversation_Set(4, {"FDML0": 0.4, "MEDR0": 0.3, "MGRL0": 0.2, "MDAC0": 0.1}, 
                                         turn_duration_seeds={"base_duration": 10.0, "deviation_ratio": 0.5, "power_curve": 1.0},
                                         conversation_duration_seeds={"base_duration": 50.0, "deviation_ratio": 0.9, "power_curve": 0.5}
                                         )
