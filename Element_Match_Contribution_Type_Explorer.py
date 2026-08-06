@@ -643,8 +643,6 @@ def Run_Element_Match_Contribution_Type_Exploration(
                 segment_start_index = processed_timepoint_count + 1
                 # the very first valid timepoint of a turn where the speaker is the voice_id itself resets accumulative_deviation tracking to 0, rather than continuing from wherever it left off
                 pending_accumulative_deviation_reset = include_accumulative_deviation and accumulative_deviation_use_self_tracking_reset and speaker_id == voice_id
-                # same self-tracking idea, applied to the signal-rate running totals themselves: a turn where the speaker is the voice_id being tracked starts that voice_id's signal-rate tracking over from 0 instead of carrying over whatever the previous (different) speaker left behind
-                pending_signal_rate_reset = use_signal_rate_simulation and speaker_id == voice_id
 
                 for audio_name in audio_list:
                     distribution, timepoint_phonemes = audio_cache[(speaker_id, audio_name)]
@@ -656,11 +654,6 @@ def Run_Element_Match_Contribution_Type_Exploration(
                             continue
 
                         if use_signal_rate_simulation:
-                            if pending_signal_rate_reset:
-                                total_distribution_signal_rate = 0.0
-                                distribution_ratio_signal_rates = {freq: 0.0 for freq in voiced_frequency_bucket_centers}
-                                pending_signal_rate_reset = False
-
                             # non-voiced timepoints (only reachable here when include_non_voiced_timepoints is True) decay both running totals toward 0 instead of being pulled toward this timepoint's real values, which keeps their ratio — and everything computed from it — unchanged for the duration of a non-voiced stretch
                             signal_rate_second_value = 1.0 if timepoint_is_voiced else 0.0
                             # total_distribution_signal_rate and every bucket's distribution_ratio_signal_rates must be updated for this timepoint before any bucket below can compute its signal_rate_ratio
@@ -673,7 +666,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                 )
 
                         if include_non_voiced_timepoints and total_distribution_signal_rate == 0.0:
-                            # no voiced timepoint has been seen yet since the run (or the last sequence/self-turn reset) started, so total_distribution_signal_rate is still exactly 0.0 — dividing by it below would be a divide-by-zero, so this timepoint is still included on the timeline but reported as no-value (NaN) across every tracked list instead of being computed
+                            # no voiced timepoint has been seen yet since the run (or the current sequence) started, so total_distribution_signal_rate is still exactly 0.0 — dividing by it below would be a divide-by-zero, so this timepoint is still included on the timeline but reported as no-value (NaN) across every tracked list instead of being computed
                             if need_cumulative_comparative_occurrence_ratios:
                                 for null_freq_center in voiced_frequency_bucket_centers:
                                     cumulative_comparative_occurrence_ratios[null_freq_center].append(math.nan)
