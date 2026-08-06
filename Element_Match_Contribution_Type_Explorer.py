@@ -29,6 +29,12 @@ VARIANT_ORDER = [
     "accumulative_deviation",
 ]
 
+METRIC_ORDER = [
+    "match_ratio",
+    "transition_duration",
+    "match_differentiation",
+]
+
 _OVERALL_KEYS = {
     "weighted_binary_match_contribution": "weighted_binary_match_contributions",
     "occurrence_percentile_deviation": "average_occurrence_percentile_deviations",
@@ -131,21 +137,21 @@ def _Occurrence_Percentile_Half_Distance(deviation, minimum):
 
 # --- global bounds computation ---
 
-def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound, accumulative_deviation_hyperparameters=None):
+def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound, accumulative_deviation_hyperparameters=None, chart_y_minimums=None):
     overall_ylims = {}
     per_bucket_ylims = {}
+    chart_y_minimums = chart_y_minimums or {}
 
+    # every variant now shares the same "0 is best, negative is worst" overall scale, so the true observed minimum is computed identically for all of them (NaN entries — from leading non-voiced timepoints — are silently skipped, since any comparison against NaN is False) and then floored at that variant's chart_y_minimum, if one is set and the observed minimum would otherwise be lower
     for variant in included_variants:
-        if variant == "weighted_binary_match_contribution":
-            overall_ylims[variant] = (0.0, 1.0)
-        else:
-            key = _OVERALL_KEYS[variant]
-            global_minimum = 0.0
-            for data in all_results.values():
-                for value in data[key]:
-                    if value < global_minimum:
-                        global_minimum = value
-            overall_ylims[variant] = (global_minimum, 0.0)
+        key = _OVERALL_KEYS[variant]
+        global_minimum = 0.0
+        for data in all_results.values():
+            for value in data[key]:
+                if value < global_minimum:
+                    global_minimum = value
+        chart_y_minimum = chart_y_minimums.get(variant, float("-inf"))
+        overall_ylims[variant] = (max(global_minimum, chart_y_minimum), 0.0)
 
     for variant in included_variants:
         if variant == "weighted_binary_match_contribution":
@@ -196,6 +202,86 @@ def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucke
             per_bucket_ylims[variant] = (global_minimum, 0.0)
 
     return overall_ylims, per_bucket_ylims
+
+
+# --- aggregate metrics ---
+
+def _Compute_All_Speaker_Metrics(variant, voice_ids, per_voice_results, sequence_index, speaker_segments, metric_inclusions):
+    want_match_ratio = metric_inclusions.get("match_ratio", False)
+    want_transition_duration = metric_inclusions.get("transition_duration", False)
+    want_match_differentiation = metric_inclusions.get("match_differentiation", False)
+    if not (want_match_ratio or want_transition_duration or want_match_differentiation):
+        return {}
+
+    overall_key = _OVERALL_KEYS[variant]
+    voice_value_lists = {}
+    for voice_id in voice_ids:
+        all_results = per_voice_results.get(voice_id)
+        if all_results is None:
+            continue
+        voice_value_lists[voice_id] = all_results[sequence_index][overall_key]
+
+    match_ratio_numerator = 0
+    match_ratio_denominator = 0
+    transition_durations = []
+    match_differentiation_terms = []
+
+    # audio periods for a speaker whose voice isn't in voice_value_lists (not among the compared voices) are excluded entirely, from both numerator and denominator of every metric
+    for speaker_id, start_index, end_index in speaker_segments:
+        if start_index >= end_index or speaker_id not in voice_value_lists:
+            continue
+
+        own_values = voice_value_lists[speaker_id]
+        first_reached_index = None
+
+        for timepoint_index in range(start_index, end_index):
+            own_value = own_values[timepoint_index] if timepoint_index < len(own_values) else math.nan
+            if math.isnan(own_value):
+                # a NaN own-value (e.g. a leading non-voiced timepoint under include_non_voiced_timepoints) can't meaningfully be compared, so this timepoint is skipped entirely, same as a not-in-voice_ids period
+                continue
+
+            other_values = {}
+            for other_voice_id, values in voice_value_lists.items():
+                if other_voice_id == speaker_id:
+                    continue
+                other_value = values[timepoint_index] if timepoint_index < len(values) else math.nan
+                if not math.isnan(other_value):
+                    other_values[other_voice_id] = other_value
+
+            if want_match_ratio or want_transition_duration:
+                # a tie between the speaker's own voice and any other voice does not count as the speaker's voice having the highest value, so this is a strict inequality against every other candidate (vacuously True if there are no other candidate values at this timepoint)
+                is_speaker_highest = all(own_value > other_value for other_value in other_values.values())
+                if want_match_ratio:
+                    match_ratio_denominator += 1
+                    if is_speaker_highest:
+                        match_ratio_numerator += 1
+                if want_transition_duration and first_reached_index is None and is_speaker_highest:
+                    first_reached_index = timepoint_index
+
+            if want_match_differentiation:
+                # a zero-valued other-voice would be a divide-by-zero; that single (own / other) comparison is skipped rather than the whole timepoint
+                ratio_terms = [own_value / other_value for other_value in other_values.values() if other_value != 0.0]
+                if ratio_terms:
+                    match_differentiation_terms.append(sum(ratio_terms) / len(ratio_terms))
+
+        if want_transition_duration:
+            # if the speaker's voice never reaches the highest value within its own turn, the full turn duration is used as the elapsed time
+            elapsed_timepoint_count = (first_reached_index - start_index) if first_reached_index is not None else (end_index - start_index)
+            transition_durations.append(elapsed_timepoint_count * Spectrogram_Window_Jump_In_Seconds)
+
+    metrics = {}
+    if want_match_ratio:
+        metrics["match_ratio"] = (match_ratio_numerator / match_ratio_denominator) if match_ratio_denominator > 0 else math.nan
+    if want_transition_duration:
+        metrics["transition_duration"] = (sum(transition_durations) / len(transition_durations)) if transition_durations else math.nan
+    if want_match_differentiation:
+        metrics["match_differentiation"] = (sum(match_differentiation_terms) / len(match_differentiation_terms)) if match_differentiation_terms else math.nan
+
+    return metrics
+
+
+def _Format_Metrics_Text(metrics):
+    return ", ".join(f"{metric_name} {round(metrics[metric_name], 3)}" for metric_name in METRIC_ORDER if metric_name in metrics)
 
 
 # --- chart generation ---
@@ -369,7 +455,7 @@ def Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, 
     print(f"Element_Match_Contribution_Type_Explorer: combined chart saved to '{output_path}'")
 
 
-def Generate_All_Speaker_Overall_Chart(voice_ids, sequence_index, included_variants, overall_ylims, per_voice_results, speaker_segments):
+def Generate_All_Speaker_Overall_Chart(voice_ids, sequence_index, included_variants, overall_ylims, per_voice_results, speaker_segments, metric_inclusions):
     variant_count = len(included_variants)
     figure, axes = pyplot.subplots(variant_count, 1, figsize=(20, 5 * variant_count))
     if variant_count == 1:
@@ -396,7 +482,12 @@ def Generate_All_Speaker_Overall_Chart(voice_ids, sequence_index, included_varia
         y_limits = overall_ylims[variant]
         axis.set_ylim(y_limits[0], y_limits[1])
         axis.set_xlim(0, max_x_value)
-        axis.set_title(f"{variant} | All Voices vs {sequence_label}")
+        metrics = _Compute_All_Speaker_Metrics(variant, voice_ids, per_voice_results, sequence_index, speaker_segments, metric_inclusions)
+        metrics_text = _Format_Metrics_Text(metrics)
+        title = f"{variant} | {sequence_label}"
+        if metrics_text:
+            title += f" | {metrics_text}"
+        axis.set_title(title)
         axis.set_xlabel("Time (s)")
         axis.set_ylabel(variant)
         axis.legend()
@@ -429,7 +520,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
     conversation_json_file_name,
     aggregate_match_types,
     cross_type_hyperparameters,
-    chart_type_inclusions
+    chart_type_inclusions,
+    metric_inclusions
 ):
     comparative_voices_audio_set = Load_Comparative_Voices_Audio_Set(conversation_json_file_name)
 
@@ -457,6 +549,12 @@ def Run_Element_Match_Contribution_Type_Exploration(
         return
 
     need_per_voice_ylims = include_per_speaker_overall_chart or include_combined_overall_chart or include_per_speaker_per_bucket_chart
+
+    # an optional per-variant floor on how deep the overall-value y-axis is allowed to go; values below it are still counted toward aggregate metrics, just not displayed
+    chart_y_minimums = {
+        variant: aggregate_match_types.get(variant, {}).get("hyperparameters", {}).get("chart_y_minimum", float("-inf"))
+        for variant in included_variants
+    }
 
     include_weighted_binary_match_contribution = "weighted_binary_match_contribution" in included_variants
     include_occurrence_percentile_deviation = "occurrence_percentile_deviation" in included_variants
@@ -521,7 +619,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
             distribution_ratio_signal_rates = {freq: 0.0 for freq in voiced_frequency_bucket_centers}
 
             match_contribution_weights = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_weighted_binary_match_contribution else {}
-            weighted_binary_match_contributions = [0.5] if include_weighted_binary_match_contribution else []
+            weighted_binary_match_contributions = [-0.5] if include_weighted_binary_match_contribution else []
 
             occurrence_percentile_deviations = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if need_occurrence_percentile_deviation_buckets else {}
             average_occurrence_percentile_deviations = [0.0] if include_occurrence_percentile_deviation else []
@@ -696,12 +794,13 @@ def Run_Element_Match_Contribution_Type_Exploration(
                         pending_accumulative_deviation_reset = False
 
                         if include_weighted_binary_match_contribution:
+                            # shifted by -1.0 so 0 is the best value and -1 is the worst, matching the "0 is best" convention shared by every other aggregate_match_type
                             total_weight = sum(timepoint_weighted_binary_match_contribution_weights)
                             if total_weight == 0.0:
-                                weighted_binary_match_contributions.append(0.5)
+                                weighted_binary_match_contributions.append(-0.5)
                             else:
                                 weighted_binary_match_contributions.append(
-                                    sum(weight for weight, positive in zip(timepoint_weighted_binary_match_contribution_weights, timepoint_weighted_binary_match_contribution_is_positive) if positive) / total_weight
+                                    (sum(weight for weight, positive in zip(timepoint_weighted_binary_match_contribution_weights, timepoint_weighted_binary_match_contribution_is_positive) if positive) / total_weight) - 1.0
                                 )
 
                         if include_occurrence_percentile_deviation:
@@ -785,7 +884,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
             per_voice_ylims[voice_id] = _Compute_Global_Ylims(
                 included_variants, all_results, voiced_frequency_bucket_centers,
                 weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound,
-                accumulative_deviation_hyperparameters
+                accumulative_deviation_hyperparameters, chart_y_minimums
             )
 
         per_voice_results[voice_id] = all_results
@@ -823,12 +922,12 @@ def Run_Element_Match_Contribution_Type_Exploration(
         all_speaker_overall_ylims, _ = _Compute_Global_Ylims(
             included_variants, combined_all_voices_results, next(iter(per_voice_voiced_frequency_bucket_centers.values())),
             weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound,
-            accumulative_deviation_hyperparameters
+            accumulative_deviation_hyperparameters, chart_y_minimums
         )
 
         reference_all_results = per_voice_results[successful_voice_ids[0]]
         for sequence_index in range(len(comparative_voices_audio_set)):
             speaker_segments = reference_all_results[sequence_index]["speaker_segments"]
-            Generate_All_Speaker_Overall_Chart(successful_voice_ids, sequence_index, included_variants, all_speaker_overall_ylims, per_voice_results, speaker_segments)
+            Generate_All_Speaker_Overall_Chart(successful_voice_ids, sequence_index, included_variants, all_speaker_overall_ylims, per_voice_results, speaker_segments, metric_inclusions)
 
     print(f"Element_Match_Contribution_Type_Explorer: exploration complete for voice_ids {successful_voice_ids}")

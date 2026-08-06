@@ -101,24 +101,29 @@ def Run_Element_Match_Contribution_Type_Analysis():
                 "hyperparameters": {
                     "positive_contribution_range": 0.4,
                     "positive_weight_power_curve": 0.5,
-                    "negative_weight_proximity_half_distance_increment": 1.0
+                    "negative_weight_proximity_half_distance_increment": 1.0,
+                    "chart_y_minimum": float("-inf")
                 }
             },
             "occurrence_percentile_deviation": {
                 "include_variant": True,
-                "hyperparameters": {}
+                "hyperparameters": {
+                    "chart_y_minimum": float("-inf")
+                }
             },
             "occurrence_percentile_inverse_deviation": {
                 "include_variant": True,
                 "hyperparameters": {
                     "deviation_power_curve": 1.0,
-                    "inverse_deviation_minimum": -100.0
+                    "inverse_deviation_minimum": -100.0,
+                    "chart_y_minimum": -10.0
                 }
             },
             "occurrence_percentile_half_distance": {
                 "include_variant": True,
                 "hyperparameters": {
-                    "half_distance_minimum": -10.0
+                    "half_distance_minimum": -10.0,
+                    "chart_y_minimum": -10.0
                 }
             },
             "accumulative_deviation":{
@@ -128,15 +133,16 @@ def Run_Element_Match_Contribution_Type_Analysis():
                     "use_non_directional_element_deviations": False,
                     "use_average_element_deviations": True,
                     "deviation_type": "occurrence_percentile_deviation",
-                    "use_self_tracking_reset": True
+                    "use_self_tracking_reset": True,
+                    "chart_y_minimum": float("-inf")
                 }
             }
         },
         cross_type_hyperparameters={
             "use_signal_rate_simulation": True,
-            "include_non_voiced_timepoints": False,
+            "include_non_voiced_timepoints": True,
             "use_bell_curve_percentile_projection": True,
-            "occurrence_ratio_cumulation_half_life": 0.5,
+            "occurrence_ratio_cumulation_half_life": 1.0,
             "voice_profile_cumulation_half_life": None
         },
         chart_type_inclusions={
@@ -144,6 +150,11 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "all_speaker_overall": True,
             "per_speaker_overall": False,
             "per_speaker_per_bucket": False
+        },
+        metric_inclusions={
+            "match_ratio": True,
+            "transition_duration": True,
+            "match_differentiation": True
         }
     )
 

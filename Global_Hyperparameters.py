@@ -43,7 +43,7 @@ Audio_File_Set = ["normal_1", "no_nose_1", "round_1"]
 #Audio_File_Set = ["normal_1"]
 #Audio_File_Set = ["round_1", "round_2", "round_3"]
 
-Analysis_Directory = "tmp/media/layered_subdistributions/6000_bell_conversational_rate_0o5/"
+Analysis_Directory = "tmp/media/layered_subdistributions/6000_bell_conversational_pauses_1o0/"
 Analysis_Run_Name = "lookup"
 
 Phoneme_Corpus_Directory = "../Phoneme_Corpus/data/TRAIN/DR1/"
