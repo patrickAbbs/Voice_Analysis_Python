@@ -134,6 +134,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
         },
         cross_type_hyperparameters={
             "use_signal_rate_simulation": True,
+            "include_non_voiced_timepoints": False,
             "use_bell_curve_percentile_projection": True,
             "occurrence_ratio_cumulation_half_life": 0.5,
             "voice_profile_cumulation_half_life": None

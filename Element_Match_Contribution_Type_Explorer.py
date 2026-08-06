@@ -438,6 +438,10 @@ def Run_Element_Match_Contribution_Type_Exploration(
     )
     use_bell_curve = cross_type_hyperparameters.get("use_bell_curve_percentile_projection", False)
     use_signal_rate_simulation = cross_type_hyperparameters.get("use_signal_rate_simulation", False)
+    include_non_voiced_timepoints_hyperparameter = cross_type_hyperparameters.get("include_non_voiced_timepoints", False)
+    if include_non_voiced_timepoints_hyperparameter and not use_signal_rate_simulation:
+        print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['include_non_voiced_timepoints'] is True but 'use_signal_rate_simulation' is False; include_non_voiced_timepoints requires use_signal_rate_simulation and will be ignored for this run")
+    include_non_voiced_timepoints = include_non_voiced_timepoints_hyperparameter and use_signal_rate_simulation
 
     included_variants = [variant for variant in VARIANT_ORDER if aggregate_match_types.get(variant, {}).get("include_variant", False)]
     if not included_variants:
@@ -544,9 +548,50 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
                     for timepoint_index in range(len(distribution[0])):
                         voiced_ratio = numpy.sum(distribution[:voiced_frequency_limit_index, timepoint_index])
-                        if voiced_ratio < Subdistribution_Timepoint_Voiced_Ratio_Minimum:
+                        timepoint_is_voiced = voiced_ratio >= Subdistribution_Timepoint_Voiced_Ratio_Minimum and timepoint_phonemes[timepoint_index] is not None
+                        if not timepoint_is_voiced and not include_non_voiced_timepoints:
                             continue
-                        if timepoint_phonemes[timepoint_index] is None:
+
+                        if use_signal_rate_simulation:
+                            # non-voiced timepoints (only reachable here when include_non_voiced_timepoints is True) decay both running totals toward 0 instead of being pulled toward this timepoint's real values, which keeps their ratio — and everything computed from it — unchanged for the duration of a non-voiced stretch
+                            signal_rate_second_value = 1.0 if timepoint_is_voiced else 0.0
+                            # total_distribution_signal_rate and every bucket's distribution_ratio_signal_rates must be updated for this timepoint before any bucket below can compute its signal_rate_ratio
+                            total_distribution_signal_rate = Weighted_Average(total_distribution_signal_rate, occurrence_ratio_cumulation_weight, signal_rate_second_value, 1.0 - occurrence_ratio_cumulation_weight)
+                            for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
+                                signal_rate_timepoint_ratio = float(distribution[freq_index][timepoint_index]) if timepoint_is_voiced else 0.0
+                                distribution_ratio_signal_rates[freq_center] = Weighted_Average(
+                                    distribution_ratio_signal_rates[freq_center], occurrence_ratio_cumulation_weight,
+                                    signal_rate_timepoint_ratio, 1.0 - occurrence_ratio_cumulation_weight
+                                )
+
+                        if include_non_voiced_timepoints and total_distribution_signal_rate == 0.0:
+                            # no voiced timepoint has been seen yet anywhere in this run, so total_distribution_signal_rate is still exactly 0.0 — dividing by it below would be a divide-by-zero, so this timepoint is still included on the timeline but reported as no-value (NaN) across every tracked list instead of being computed
+                            if need_cumulative_comparative_occurrence_ratios:
+                                for null_freq_center in voiced_frequency_bucket_centers:
+                                    cumulative_comparative_occurrence_ratios[null_freq_center].append(math.nan)
+                            if include_weighted_binary_match_contribution:
+                                for null_freq_center in voiced_frequency_bucket_centers:
+                                    match_contribution_weights[null_freq_center].append(math.nan)
+                                weighted_binary_match_contributions.append(math.nan)
+                            if need_occurrence_percentile_deviation_buckets:
+                                for null_freq_center in voiced_frequency_bucket_centers:
+                                    occurrence_percentile_deviations[null_freq_center].append(math.nan)
+                            if include_occurrence_percentile_deviation:
+                                average_occurrence_percentile_deviations.append(math.nan)
+                            if include_occurrence_percentile_inverse_deviation:
+                                for null_freq_center in voiced_frequency_bucket_centers:
+                                    occurrence_percentile_inverse_deviations[null_freq_center].append(math.nan)
+                                average_occurrence_percentile_inverse_deviations.append(math.nan)
+                            if include_occurrence_percentile_half_distance:
+                                for null_freq_center in voiced_frequency_bucket_centers:
+                                    occurrence_percentile_half_distances[null_freq_center].append(math.nan)
+                                average_occurrence_percentile_half_distances.append(math.nan)
+                            if include_accumulative_deviation:
+                                for null_freq_center in voiced_frequency_bucket_centers:
+                                    element_accumulative_deviations[null_freq_center].append(math.nan)
+                                average_element_accumulative_deviations.append(math.nan)
+
+                            processed_timepoint_count += 1
                             continue
 
                         timepoint_weighted_binary_match_contribution_weights = []
@@ -555,16 +600,6 @@ def Run_Element_Match_Contribution_Type_Exploration(
                         timepoint_occurrence_percentile_inverse_deviations = []
                         timepoint_occurrence_percentile_half_distances = []
                         timepoint_element_accumulative_deviations = []
-
-                        if use_signal_rate_simulation:
-                            # total_distribution_signal_rate and every bucket's distribution_ratio_signal_rates must be updated for this timepoint before any bucket below can compute its signal_rate_ratio
-                            total_distribution_signal_rate = Weighted_Average(total_distribution_signal_rate, occurrence_ratio_cumulation_weight, 1.0, 1.0 - occurrence_ratio_cumulation_weight)
-                            for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
-                                signal_rate_timepoint_ratio = float(distribution[freq_index][timepoint_index])
-                                distribution_ratio_signal_rates[freq_center] = Weighted_Average(
-                                    distribution_ratio_signal_rates[freq_center], occurrence_ratio_cumulation_weight,
-                                    signal_rate_timepoint_ratio, 1.0 - occurrence_ratio_cumulation_weight
-                                )
 
                         for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
                             timepoint_ratio = float(distribution[freq_index][timepoint_index])
@@ -644,7 +679,9 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                     if (new_ratio < 0.5) if use_signal_rate_simulation else (timepoint_ratio < bucket_medians[freq_index]):
                                         current_timepoint_deviation *= -1.0
 
-                                previous_element_accumulative_deviation = 0.0 if pending_accumulative_deviation_reset else element_accumulative_deviations[freq_center][-1]
+                                previous_element_accumulative_deviation_raw = element_accumulative_deviations[freq_center][-1]
+                                # a NaN here can only come from a leading (pre-first-voiced-timepoint) null timepoint under include_non_voiced_timepoints — treat it the same as "no accumulation has happened yet" rather than letting NaN propagate forward forever
+                                previous_element_accumulative_deviation = 0.0 if (pending_accumulative_deviation_reset or math.isnan(previous_element_accumulative_deviation_raw)) else previous_element_accumulative_deviation_raw
                                 if accumulative_deviation_use_average_element_deviations:
                                     new_element_accumulative_deviation = Weighted_Average(
                                         previous_element_accumulative_deviation, accumulative_deviation_decay_rate,

@@ -643,40 +643,17 @@ Separately, I would also like you to remove / delete the currently implemented r
 
 --------------------------
 
-Next, I would also like you to implement a partial, and optional, version of the per-frequency-bucket timepoint deviation calculation logic refactor that was implemented and then reverted a few days ago. This time, instead of replacing the current logic with the new logic, the both versions of the logic should be implemented. Additionally, this time (to start with at least) the optional alternative logic path should not impact the accumulative_deviation aggregate_match_type (though it will impact all others), so any variables or values that are needed for accumulative_deviation should still be calculable even if the new alternative logic is being used. A new Boolean hyperparameter "use_signal_rate_simulation" should be added to cross_type_hyperparameters. When this is set to False, all logic should run as currently implemented. When set to True, the following logic changes should be used instead.
+Next I would like you to implement a minor change to the occurrence_percentile_deviation aggregate_match_type to better align it with the "zero as the best value" of the other occurrence_percentile types. I think this should be doable basically by removing the "1.0 -" at the beginning of the _Occurrence_Percentile_Deviation() function equation, though if this has any downstream effects please account for those too.
 
-First, at the very beginning of the _Process_Sequences_For_Voice a float variable total_distribution_signal_rate should be initialized to 0. Then, a new dictionary<frequency_bucket, float> variable "distribution_ratio_signal_rates" should be initialized right at the beginning of the "for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set)" loop, which has all of its float values initialized to 0.
-
-total_distribution_signal_rate is updated for each timepoint (including the first). Its updated value is calculated by calling the Weighted_Average() function, with input values to the function being:
-    1) value_1 is the current total_distribution_signal_rate value 
-    2) value_2 is 1.0
-    3) weight_1 is occurrence_ratio_cumulation_weight
-    4) weight_2 is (1.0 - occurrence_ratio_cumulation_weight)
-
-distribution_ratio_signal_rates is also updated for each frequency_bucket at each timepoint (including the first). Its updated value is calculated by calling the Weighted_Average() function, with input values to the function being:
-    1) value_1 is the current distribution_ratio_signal_rates value for the frequency_bucket
-    2) value_2 is timepoint_ratio
-    3) weight_1 is occurrence_ratio_cumulation_weight
-    4) weight_2 is (1.0 - occurrence_ratio_cumulation_weight)
-
-Next, the logic used to calculate the new value to append to cumulative_comparative_occurrence_ratios for each frequency_bucket at each timepoint should change as follows:
-    1) Instead of using timepoint_ratio for the _Bell_Curve_Value_2() or _Lookup_Closest_Value() call, instead a new variable "signal_rate_ratio" should be used that is calculated as the timepoint-updated distribution_ratio_signal_rate value for the frequency_bucket divided by the timepoint-updated total_distributional_signal_rate. Note that this means total_distributional_signal_rate should be updated for a timepoint before any of the frequency_buckets perform these calls.
-    2) cumulative_comparative_occurrence_ratios directly appends the output of this _Bell_Curve_Value_2() or _Lookup_Closest_Value() call instead of using the output value as the input to another subsequent Weighted_Average() call.
-
-After you finish I will do some test runs and look at the results. Depending how they look, I may then expand the alternative logic path to include changes to accumulative_deviation logic as well.
+Once this occurrence_percentile_deviation equation is updated, it should also be added as an additional optional setting for the deviation_type hyperparameter of the accumulative_deviation aggregate_match_type.
 
 
+-------------------------------------------------------------------------------------------------------
 
 
+Next, I would also like you to implement a modified, and optional, version of the per-frequency-bucket timepoint deviation calculation logic refactor that was implemented and then reverted a few days ago. This time, instead of replacing the current logic with the new logic, both versions of the logic should be implemented. A new Boolean hyperparameter "use_signal_rate_simulation" should be added to cross_type_hyperparameters. When this is set to False, all logic should run as currently implemented. When set to True, the following logic changes should be used instead.
 
-
-
-
-
-
-Next, I would also like you to implement a partial, and optional, version of the per-frequency-bucket timepoint deviation calculation logic refactor that was implemented and then reverted a few days ago. This time, instead of replacing the current logic with the new logic, the both versions of the logic should be implemented. Additionally, this time (to start with at least) the optional alternative logic path should not impact the accumulative_deviation aggregate_match_type (though it will impact all others), so any variables or values that are needed for accumulative_deviation should still be calculable even if the new alternative logic is being used. A new Boolean hyperparameter "use_signal_rate_simulation" should be added to cross_type_hyperparameters. When this is set to False, all logic should run as currently implemented. When set to True, the following logic changes should be used instead.
-
-First, at the very beginning of the _Process_Sequences_For_Voice a float variable total_distribution_signal_rate should be initialized to 0. Then, a new dictionary<frequency_bucket, float> variable "distribution_ratio_signal_rates" should be initialized right at the beginning of the "for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set)" loop, which has all of its float values initialized to 0.
+First, at the very beginning of the _Process_Sequences_For_Voice() a float variable total_distribution_signal_rate should be initialized to 0. Then, a new dictionary<frequency_bucket, float> variable "distribution_ratio_signal_rates" should be initialized right at the beginning of the "for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set)" loop, which has all of its float values initialized to 0.
 
 total_distribution_signal_rate is updated for each timepoint (including the first). Its updated value is calculated by calling the Weighted_Average() function, with input values to the function being:
     1) value_1 is the current total_distribution_signal_rate value 
@@ -702,12 +679,43 @@ Finally, the current logic for accumulative_deviation should change as follows:
 Let me know if anything is unclear or ambiguous, or if I am missing anything that this optional alternative logic path would need to account for. Otherwise, implement the new logic path and then I will test it out.
 
 
+-------------------------------------------------------------------------------------------------------
 
 
+Next, I want you to implement another optional alternative logic path for the Element_Match_Contribution_Type_Explorer module. A new Boolean hyperparameter "include_non_voiced_timepoints" should be added to cross_type_hyperparameters. When this is set to True and the use_signal_rate_simulation hyperparameter is set to False, then the new alternative logic should not be used and the user should be alerted. If both include_non_voiced_timepoints and use_signal_rate_simulation are True, the following logic changes should be used.
+
+In the "for timepoint_index in range(len(distribution[0]))" loop in _Process_Sequences_For_Voice(), the loop should not continue to the next timepoint if one of the conditional checks at the beginning of the loop fails. Instead, the timepoint should be processed and added for all of the aggregate_match_type trackers just like timepoints that do pass the checks. However, instead of using 1.0 as the second Weighted_Average() value for the total_distribution_signal_rate update and using signal_rate_timepoint_ratio as the second Weighted_Average() value for the distribution_ratio_signal_rates[freq_center] update, the second Weighted_Average() value for both variable updates should be 0.
+
+I think that is all the logic change that is needed, other than maybe some divide-by-zero protections that I'll come back to shortly. The behavior I expect if I am thinking about it correctly is that for all aggregate_match_types, all element and aggregate values will remain constant throughout each period of non-voiced timepoints. This is because signal_rate_ratios will remain constant throughout these periods, because both the distribution_ratio_signal_rates[freq_center] numerator and total_distribution_signal_rate denominator will have decreased by equivalent proportional amounts. 
+
+At the end of each non-voiced period, though, because both the distribution_ratio_signal_rates and total_distribution_signal_rate have decreased over the period they will then be more strongly adjusted by new voiced timepoint values after the non-voiced period than they were before it. This can be interpreted to mean that voice matching will be more amenable to change after pauses in voiced speech, which may help speed up switching to a new voice since there are often pauses between speakers in conversation.
+
+As for the potential divide-by-zero issue, I think this could happen right at the beginning of a conversation audio sequence if there are non-voiced timepoints before there have been any voiced timepoints, since in that case total_distribution_signal_rate would still be zero. To address this, if there such conversation-leading non-voiced timepoints, include them but set all aggregate_match_type element and aggregate values for the timepoint to null or empty or some other indicator that means that they will not be displayed as any value on the output charts.
+
+Let me know if anything is unclear or ambiguous, or if I am missing anything that this optional alternative logic path would need to account for. Otherwise, implement the new logic path and then I will test it out.
 
 
+-------------------------------------------------------------------------------------------------------
 
 
+Next, I want you to add an extension to the Element_Match_Contribution_Type_Explorer module. The goal of this extension is to calculate aggregate metrics for the various aggregate_match_types that can help summarize, interpret, and compare there respective performance over the course of various speech audio sequences. 
 
+A user will control which metrics to include for a run via a new dictionary<string, Boolean> variable "metric_inclusions" that should be added as a new parameter to the Run_Element_Match_Contribution_Type_Exploration() function. Each dictionary key corresponds to one of the supported metric types, and if set to True then the metric should be calculated for that function run. 
 
+Each metric is calculated separately for each subplot in the all_speaker_overall output chart. This means that each combination of an aggregate_match_type and a conversation sequence will have a metric value calculated for it. Once calculated, each metric should be textually displayed as part of the subplot title on the output chart. Currently, that subplot title is populated as "{variant} | All Voices vs {sequence_label}"; this should be updated to "{variant} | {sequence_label} | {metric_values}", where each metric value is displayed as "{metric_name} {metric value rounded to 3 decimal places}" and is comma-separated from the next metric.
 
+Next, I will walk through three metrics to implement for now, describing the logic for calculating each one.
+
+First is "match_ratio". This is an inherently 0.0 -> 1.0 valued metric that is calculated as ([the number of timepoints for which the highest value voice for the aggregate_match_type matches the current speaker for that timepoint] / [the total number of timepoints]). So, for example, if an audio sequence has 100 timepoints of which 50 are for speaker "FCJF0" and 50 are for "MCPM0", and if "FCJF0" has the highest occurrence_percentile_inverse_deviation value for 40 of the "FCJF0" timepoints and "MCPM0" has the highest occurrence_percentile_inverse_deviation value for 30 of the "MCPM0" timepoints, then the match_ratio metric value for the occurrence_percentile_inverse_deviation subplot for the audio sequence would be 0.7 (== (30 + 40) / 100).
+
+Next is "transition_duration". This metric is calculated as [the average amount of time elapsed after each audio sequence switches to a new speaker before the corresponding voice for the new speaker first reaches the highest value for the aggregate_match_type]. So, for example, if an audio sequence consists of 50 0.01-second timepoints for speaker "FCJF0" followed by 50 timepoints for speaker "MCPM0", and the "FCJF0" first reaches the highest value 20 timepoints after the "FCJF0" audio section starts which the "MCPM0" voice never reaches the highest value for the "MCPM0" audio section, then transition_duration would be 0.35 (== (0.2 + 0.5) / 2).
+
+Finally, "match_differentiation". This metric is calculated as ([speaker's voice aggregate_metric_value] / [non-speaker voice aggregate_metric_value]) averaged across all non-speaker voices for each timepoint and across all timepoints for an audio sequence. So, for example, a timepoint within a "FCJF0" speaker period for which "FCJF0" voice's value is -0.1 while "MCPM0" value is -0.2 and "FDML0" value is -0.4 would calculate a match_differentiation value for that timepoint of 0.375 (== ((-0.1 / -0.2) + (-0.1 / -0.4)) / 2).
+
+For all of the metrics, any audio periods where the speaker does not have its corresponding voice included in the comparison voice set should be excluded from metric calculation. So, for example, if an audio sequence has a period for speaker "MGRL0" but only "FCJF0" and "MCPM0" are included in the compared voices, then none of the timepoints within the "MGRL0" period should be incorporated into any metric calculations.
+
+Also, for the match_ratio and transition_duration metrics, any timepoint for which the speaker-corresponding-voice's aggregate_metric_value is exactly equal to another voice's aggregate_metric_value for that timepoint should not be counted as a timepoint for which the speaker's voice has the highest value. So, for example, if an audio period for speaker "FCJF0" begins with 20 timepoints for which voices "FCJF0" and "MCPM0" both have 1.0-valued weighted_binary_match_contributions, none of these timepoints should count towards the match_ratio numerator for the audio sequence for weighted_binary_match_contribution.
+
+[NOTE: NEED TO ACCOUNT FOR THAT CURRENTLY TOP TWO AGGREGATE_METRIC_VALUE TYPES ARE 0.0 -> 1.0 RATHER THAN MAXING OUT AT 0.0 AS IMPLICITLY ASSUMED BY CURRENT ABOVE LOGIC DESCRIPTIONS]
+
+Let me know if anything is unclear or ambiguous, or if I am missing anything that this optional alternative logic path would need to account for. Otherwise, implement the new logic path and then I will test it out.
