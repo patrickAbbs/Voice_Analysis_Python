@@ -721,3 +721,119 @@ To support computational consistency for these aggregate metrics across all aggr
 Finally, add a new parameter "chart_y_minimum" to each of the "hyperparameters" subdictionaries for each of the aggregate_match_types. This chart_y_minimum parameter is an override value for the y axis minimum for each respective aggregate_match_type subplot if the actual lowest y value is below that chart_y_minimum. So, for example, if chart_y_minimum for occurrence_percentile_inverse_deviation is -10 but the lowest occurrence_percentile_inverse_deviation value is -100, then the subplot y minimum should be set to -10 and any timepoints with values below -10 should not be displayed (but should be counted towards aggregate_metric_values).
 
 Let me know if anything is unclear or ambiguous, or if I am missing anything that this optional alternative logic path would need to account for. Otherwise, implement the new logic path and then I will test it out.
+
+--------------------------
+
+Great, there is also a strange behavior I see in the accumulative_deviation subplot of the output "all speaker overall" charts for the Element_Match_Contribution_Type_Explorer module that I want you to investigate. The behavioral strangeness I am seeing may just be chance, but it seems highly unlikely and so I suspect that there is some kind of underlying computational issue.
+
+My best guess is that there is some sort of timepoint misalignment going on. The way the issue is manifesting is in two ways (that I can see):
+    1) All of the compared speaker accumulative_deviation line y values look wrong in a consistent way for the first 1-to-2-ish seconds of the first voice of each conversation in the comparative_voices_audio_set after the first conversation. In each conversation after the first one, for the first second or two of the first voice all of the speaker lines follow exactly the same steep downward trajectory. This is in contrast to the first voice of the first conversation where the speaker lines diverge from each other pretty much immediately, much more in line with what I would expect.
+    2) Additionally, some of the speaker lines seems to have some kind of timepoint offset issue for voice turns going beyond just the first voice. This manifests in the form speaker line trajectories often continuing more-or-less the way they were going for the prior voice for multiple seconds at the beginning of the new voice before their trajectories start meaningfully changing. This only seems to be happening for some speaker lines, maybe just the ones that have not yet had 0-value-reset event yet? My interpretation of this is that these temporally offset lines may be somehow misaligned with the timepoints they are supposed to correspond to.
+
+Can you investigate this and let me know what you find?
+
+
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to add an optional alternative logic pathway to the Element_Match_Contribution_Type_Explorer module. The goal of this optional logic is to develop an alternative version of the currently implemented bell_curve_projections variable for each voice. Under this alternative logic the center, lower_standard_deviation, and upper_standard_deviation values for each frequency_bucket should be learned in real time during voice-corresponding speaker turns within a conversation sub_sequence, rather than being looked up from a static already processed json file. The underlying purpose of this alternative logic is to investigate how well the voice frequency_bucket distribution profiling process would work if new voices were learned on-the-fly, rather than having to be pre-trained and then statically referenced after training.
+
+To do this, we need a process that will ongoingly refine a set of estimated distribution_ratio values for each voice frequency_bucket that are respectively approximately higher than 0.15865 (== lower standard deviation), 0.5 (== median), and 0.84135 (== upper standard deviation) of processed voice speaker timepoints for the frequency_bucket. I say "approximately" because unlike the current _Extract_Bell_Curve_Projections() function logic that looks up a reference json structure containing all distribution_ratio values across all timepoints and simply selects distribution_ratios at exactly these percentiles, this new alternative logic will only be able to see the distribution_ratio value of one timepoint at a time when it is processed, and must construct estimates of where distribution_ratios at each of the three percentiles would fall without being able to see the distribution_ratio values of prior timepoints.
+
+Below is my proposed approach for how to go about this. If you identify areas for potential improvement, though, I am open to suggestions.
+
+First, add a new subdictionary called "continuous_voice_profiling" to the cross_type_hyperparameters input parameter for the Run_Element_Match_Contribution_Type_Exploration() function. This subdictionary should contain the following hyperparameters that will be used for the new alternative logic pathway:
+    1) Boolean "use_continuous_voice_profiling". When this is True and also use_bell_curve_percentile_projection is True, then the new alternative logic pathway should be used. If use_continuous_voice_profiling is True and use_bell_curve_percentile_projection is False, then the new pathway should not be used and a warning should be raised to the user.
+    2) Boolean "continue_voice_profiles_across_conversations". When this is set to True, the approximated bell curve percentile distribution_ratios for a voice should be carried over between each conversation in comparative_voices_audio_set for a given Run_Element_Match_Contribution_Type_Exploration() run; when it is set to False, these approximated distribution_ratios should be reset for each comparative_voices_audio_set conversation entry.
+    3) Boolean "use_cumulative_signal_rate_distribution_ratios". This determines whether later-described logic should use signal_rate_ratio or timepoint_ratio, which I will describe when we get there. If use_cumulative_signal_rate_distribution_ratios is True and use_signal_rate_simulation is False, then timepoint_ratio should be used and a warning should be raised to the user.
+    4) Integer "voice_profile_timepoints_threshold". This essentially sets a threshold on the number of voiced phoneme timepoints that must have been processed for a particular voice before the approximated bell curve percentile distribution_ratios for that voice should be used.
+
+Additionally, add a new entry to the chart_type_inclusions parameter for Run_Element_Match_Contribution_Type_Exploration() with the key "continuous_voice_profile_convergence". When this is True and use_continuous_voice_profiling is True, a new output chart type should be generated that I will describe the logic for later.
+
+Each voice's approximated bell curve percentile distribution_ratios should start being tracked whenever the voice's speaker_id has its first audio processed in the comparative_voices_audio_set (if continue_voice_profiles_across_conversations is True) or in each comparative_voices_audio_set entry (if continue_voice_profiles_across_conversations is False). While its speaker_id audio is being processed, the voice's approximated distribution_ratios should be updated for each timepoint where the timepoint_is_voiced variable is True.
+
+The logic for this update process will involve a few properties, which should be initialized and tracked separately for each voice in the voice_ids list. At the voice-level, a property "voice_timepoints_count" should be initialized to 0. Additionally, each frequency_bucket for each voice should for each of the three bell curve projection points (== lower standard deviation, median, and upper standard deviation) track two properties "projected_distribution_ratio" and "cumulative_occurrence_percentile", both of which can be initialized to 0.0.
+
+The first step in the per-voiced-timepoint update process is to increment "voice_timepoints_count" for the current active speaker by 1. Then, for each bell curve projection point for each frequency bucket for the speaker, the following logic should be performed:
+    1) cumulative_occurrence_percentile is updated by calling the Weighted_Average() function, with input values to the function being:
+        1) value_1 is the current cumulative_occurrence_percentile value
+        2) value_2 is 1.0 if the current timepoint {signal_rate_ratio if use_cumulative_signal_rate_distribution_ratios is True, else timepoint_ratio} for the frequency_bucket is lower than the current projected_distribution_ratio for the frequency_bucker <-> bell curve projection point pair, else value_2 is 0.0
+        3) weight_1 is (1.0 - (1.0 / voice_timepoints_count)
+        4) weight_2 is (1.0 - weight_1)
+    2) Then, projected_distribution_ratio is updated by calling the Weighted_Average() function, with input values to the function being:
+        1) value_1 is the current projected_distribution_ratio value
+        2) value_2 is ([current projected_distribution_ratio] + 1.0) if the newly updated cumulative_occurrence_percentile is lower than the target percentile value for the bell curve projection point (== 0.15865 for lower standard deviation, 0.5 for median, and 0.84135 for upper standard deviation), else value_2 is ([current projected_distribution_ratio] - 1.0).
+        3) weight_1 is (1.0 - (1.0 / voice_timepoints_count) (== same as for the cumulative_occurrence_percentile update)
+        4) weight_2 is (1.0 - weight_1)
+
+I'll take a moment to explain the reasoning behind the above update logic, since this is the core of the bell curve percentile distribution_ratios approximation technique. 
+
+The cumulative_occurrence_percentile Weighted_Average() update is essentially tracking the cumulative average percentage of timepoints for which the projected_distribution_ratio is greater than the {signal_rate_ratio if use_cumulative_signal_rate_distribution_ratios is True, else timepoint_ratio} for a given frequency_bucket <-> bell curve projection point pairing; in other words it is tracking a cumulative average occurrence_percentile for the projected_distribution_ratio.
+
+The projected_distribution_ratio Weighted_Average() update is then adjusting the projected_distribution_ratio up or down depending on whether the cumulative_occurrence_percentile is higher or lower than it is supposed to be, as determined by comparing cumulative_occurrence_percentile to the target percentile for a bell curve projection point. For example, if cumulative_occurrence_percentile is 0.81 while the target percentile is 0.84135 for a given upper-standard-deviation bell curve projection point, then this indicates that projected_distribution_ratio should be increased so that it will in turn exceed a larger proportion of {signal_rate_ratios if use_cumulative_signal_rate_distribution_ratios is True, else timepoint_ratios} to in turn move cumulative_occurrence_percentile further towards its target value.
+
+The (1.0 - (1.0 / voice_timepoints_count) calculation is used as the value_1 weight for both Weighted_Average() updates so that the weight_1 will increase as more timepoints are processed in order to stabilize cumulative_occurrence_percentile and projected_distribution_ratio values as the bell curve approximations mature. 
+
+Finally, the optional switch between using signal_rate_ratio versus timepoint_ratio depending on the use_cumulative_signal_rate_distribution_ratios is to provide a way to easily toggle between using distribution_ratio -> occurrence_percentile mappings that are based on current-timepoint distribution_ratios or signal_rate-cumulatively-averaged distribution_ratios, which is something I want to be able to easily investigate and compare.
+
+Ideally, this should result in the projected_distribution_ratio values over time converging towards the same values for each bell curve projection point as are looked up directly in the original logic pathway. As such, the projected_distribution_ratios should directly replace / fill in for the center, lower standard deviation, and upper standard deviation lookup values determined by the _Extract_Bell_Curve_Projections() function that this alternative logic pathway is replacing.
+
+The final piece of functional logic is to wait until voice_timepoints_count exceeds voice_profile_timepoints_threshold for a voice before its projected_distribution_ratio values are actually used to project occurrence_percentiles for voice <-> speaker comparisons. The purpose of this is to let projected_distribution_ratio values stabilize a bit before using them, to prevent early extreme value swings. Until a voice has its voice_timepoints_count reach this threshold, it should effectively be ignored for speaker comparison purposes. This means that, for example, in the all_speaker_overall charts a given voice will not have any of its voice <-> speaker lines populated for any timepoints before voice_timepoints_count exceeds voice_profile_timepoints_threshold, after which point all subsequent timepoints will have populated lines for the voice.
+
+In addition to the functional side of this alternative logic pathway, I would also like you to implement a new chart type that should be generated the new logic pathway is in use (as determined by use_continuous_voice_profiling being True) and a new "continuous_voice_profile_convergence" entry is True within chart_type_inclusions. The purpose of this new chart is to track how accurately and quickly the approximated bell curve percentile distribution_ratios converge towards the actual underlying percentile distribution_ratios they are intended to approximate.
+
+The chart for tracking and visualizing this comparison should look somewhat similar to the current all_speaker_overall chart, with some differences. Instead of having a different subplot for each aggregate_match_score type, instead there should be a different subplot for each conversation audio set within comparative_voices_audio_set. This means that a single overall chart with multiple subplots will be generated for each Run_Element_Match_Contribution_Type_Exploration() run.
+
+Like the all_speaker_overall chart, each speaker turn in an audio sequence should be indicated by a colored vertical dotted line corresponding to the speaker as well as a speaker_id label along the x-axis. Rather than having a single line per voice_id, though, each voice_id should have three lines; one for each bell curve projection point (== lower standard deviation, median, and upper standard deviation). Each line should have the same voice_id-corresponding color, but a different line style (e.g. solid, dotted, dashed). Each line should only start displaying once voice_timepoints_count exceeds voice_profile_timepoints_threshold for its voice, as with the other chart types.
+
+To determine the timepoint y-axis value for each line for each timepoint, calculate (-1.0 * absolute_value(projected_distribution_ratio - target_distribution_ratio)) for each frequency_bucket, where target_distribution_ratio corresponds to either the center, lower_standard_deviation, or upper_standard_deviation value extracted by _Extract_Bell_Curve_Projections() for the voice, depending on the bell curve projection point. Then, for each bell curve projection point, average these inverted absolute values across all frequency_buckets to get the final aggregate timepoint y-axis value for each voice_id bell curve projection point line.
+
+Set the y-axis maximum to 0.0, and the y-axis minimum across all subplots to whatever the lowest y-axis value is across all subplots and lines.
+
+Let me know if anything is unclear or ambiguous, or if I am missing anything that this optional alternative logic path would need to account for. Otherwise, implement the new logic path and output chart and then I will test it out.
+
+--------------------------
+
+Something looks wrong about the all_speaker_overall charts when Run_Element_Match_Contribution_Type_Exploration() is run with continuous_voice_profiling on. Can you investigate / explain it so we can see if there is an issue or misinterpretation in the new logic path design instructions?
+
+Basically, the speaker <-> voice profile aggregate_match_type lines for periods where speaker_id and voice_id are the same look plausible, with various ups and downs across the period. However, as soon as the speaker changes to a different speaker_id, the voice_id line corresponding to the speaker from the prior speaker period seems to pretty much (though not fully) "freeze" at whatever value it had at the end of that prior period, and keep that more-or-less frozen value throughout all subsequent speaker periods until the next period where the voice_id matches the speaker_id, at which point it becomes "unfrozen" and begins changing again.
+
+What is causing this? Each speaker period should be compared to all voice_ids that have surpassed the voice_profile_timepoints_threshold, so I would expect there to be meaningful change in speaker <-> voice aggregate_match values across all eligible voice_ids during each speaker period.
+
+
+
+
+************************************NOTE: IT LOOKS LIKE SOMETHING IS GOING WRONG (LIKE MATH LOGIC BUG WRONG) WITH THE AGGREGATE_MATCH_TYPE CALCULATIONS WITH THE NEW CONTINUOUS PROFILE DEVELOPMENT LOGIC. SPECIFICALLY, EVERY NON-VOICE SPEAKER'S DEVIATION DISTANCES MORE-OR-LESS (THOUGH NOTABLY NOT COMPLETELY) 'FREEZE' DURING NON-SPEAKER-VOICE TURN PERIODS, WITH ONLY THE VOICE-CORRESPONDING SPEAKER SCORE ACTUALLY MEANINGFULLY CHANGING DURING THOSE PERIODS.
+
+
+
+
+
+*************SELF NOTE****************
+The use_cumulative_signal_rate_distribution_ratios hyperparameter is intended to provide an on | off toggle option for a somewhat convoluted part of current module logic that warrants some explicit explanation.
+
+Currently, the occurrence_percentile lookups that are used for bell curve percentile projection are based on distribution_ratios that were all populated from current-timepoint-only frequency_bucket distribution ratios. In other words, these occurrence_percentile lookups | projections are NOT based on cumulation | signal_rate distribution_ratios.
+
+This in turn means that when a scenario run is performed with use_signal_rate_simulation on, the signal_rate-based distribution_ratios that are being mapped | projected to corresponding occurrence_ratios are cumulative (since signal_rate is inherently cumulative), but the distribution_ratio lookups being used to map them are not cumulative. So, it's a weird and intuitively-hacky|invalid-seeming "crossover" between non-cumulative lookup mappings for cumulative distribution_ratios. 
+
+So, use_cumulative_signal_rate_distribution_ratios is intended to provide a toggleable way to switch between:
+    1) When False, carrying over this "hacky but currently in place and working seemingly well in practice" approach, by using current timepoint timepoint_ratio as distribution_ratio value for comparing and updating projected_distribution_ratio, which I think should effectively result in projected_distribution_ratio converging towards non-cumulative occurrence_percentiles.
+    2) When True, switching to "as yet untried but more intuitively legitimate seeming" approach, but using signal_rate distribution_ratio for comparing and updating projected_distribution_ratio, which in turn should mean that occurrence_percentiles will be cumulative and on the same cumulation half_life as the signal_rate distribution_ratios being mapped to them.
+
+Notably, I tentatively think that use_cumulative_signal_rate_distribution_ratios should necessarily be set to False when producing the convergence comparison charts, since those charts inherently use the timepoint_ratio-based non-cumulative occurrence_percentile lookups as convergence reference values.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

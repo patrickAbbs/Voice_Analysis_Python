@@ -45,12 +45,12 @@ Conversational_Layered_Subdistribution_Audio_Set = [
 
 
 #Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
-#Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
-Conversational_Speaker_Audio_Set_File_Name = "FDML0_0o4_MEDR0_0o3_MGRL0_0o2_MDAC0_0o1_50o0.json"
+Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
+#Conversational_Speaker_Audio_Set_File_Name = "FDML0_0o4_MEDR0_0o3_MGRL0_0o2_MDAC0_0o1_50o0.json"
 
 #Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0"]
-#Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0"]
-Conversational_Tracked_Voice_List = ["FDML0", "MEDR0", "MGRL0", "MDAC0"]
+Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0"]
+#Conversational_Tracked_Voice_List = ["FDML0", "MEDR0", "MGRL0", "MDAC0"]
 
 New_Partial_Speaker_Audio_Set = {
     "FJSP0": ["SA1", "SA2", "SI804", "SI1434", "SI1763", "SX84", "SX174", "SX264"],
@@ -149,13 +149,22 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "include_non_voiced_timepoints": True,
             "use_bell_curve_percentile_projection": True,
             "occurrence_ratio_cumulation_half_life": 1.0,
-            "voice_profile_cumulation_half_life": None
+            "voice_profile_cumulation_half_life": None,
+            "continuous_voice_profiling":{
+                "use_continuous_voice_profiling": True,
+                "continue_voice_profiles_across_conversations": True,
+                "use_cumulative_signal_rate_distribution_ratios": True,
+                "voice_profile_timepoints_threshold": 50,
+                "projected_distribution_ratio_nudge_step": 0.01,
+                "voiced_timepoints_cumulation_weight_power": 0.75
+            }
         },
         chart_type_inclusions={
             "combined_overall": False,
             "all_speaker_overall": True,
             "per_speaker_overall": False,
-            "per_speaker_per_bucket": False
+            "per_speaker_per_bucket": False,
+            "continuous_voice_profile_convergence": True,
         },
         metric_inclusions={
             "match_ratio": True,

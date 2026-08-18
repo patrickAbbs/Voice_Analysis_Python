@@ -29,6 +29,13 @@ VARIANT_ORDER = [
     "accumulative_deviation",
 ]
 
+# (point_name, target_percentile, line_style) — shared by continuous voice profiling and its convergence chart
+_CONTINUOUS_VOICE_PROFILE_POINTS = [
+    ("lower_standard_deviation", 0.15865, ":"),
+    ("median", 0.5, "-"),
+    ("upper_standard_deviation", 0.84135, "--"),
+]
+
 METRIC_ORDER = [
     "match_ratio",
     "transition_duration",
@@ -90,6 +97,85 @@ def _Bell_Curve_Value_2(ratio, center, lower_standard_deviation, upper_standard_
 
 def _Extract_Medians(inverted_occurrence_ratios):
     return [min(bucket.items(), key=lambda key_value: abs(key_value[1] - 0.5))[0] for bucket in inverted_occurrence_ratios]
+
+
+# --- continuous voice profiling (learns bell curve projections on-the-fly instead of looking them up) ---
+
+def _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers):
+    return {
+        "voice_timepoints_count": 0,
+        "buckets": {
+            freq_center: {
+                point_name: {"projected_distribution_ratio": 0.0, "cumulative_occurrence_percentile": 0.0}
+                for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS
+            }
+            for freq_center in voiced_frequency_bucket_centers
+        },
+    }
+
+
+def _Update_Continuous_Voice_Profile(state, voiced_frequency_bucket_centers, ratio_by_bucket, nudge_step, cumulation_weight_power):
+    state["voice_timepoints_count"] += 1
+    # weight_1 grows toward 1.0 as more timepoints are processed, stabilizing both estimates as the profile matures; weight_2 shrinks as 1/(n^cumulation_weight_power) instead of the plain-harmonic 1/n, so a lower power keeps weight_2 (and thus the profile's responsiveness) higher for longer
+    weight_2 = 1.0 / (state["voice_timepoints_count"] ** cumulation_weight_power)
+    weight_1 = 1.0 - weight_2
+    for freq_center in voiced_frequency_bucket_centers:
+        ratio_value = ratio_by_bucket[freq_center]
+        bucket_state = state["buckets"][freq_center]
+        for point_name, target_percentile, _ in _CONTINUOUS_VOICE_PROFILE_POINTS:
+            point_state = bucket_state[point_name]
+            below_projection = 1.0 if ratio_value < point_state["projected_distribution_ratio"] else 0.0
+            point_state["cumulative_occurrence_percentile"] = Weighted_Average(
+                point_state["cumulative_occurrence_percentile"], weight_1, below_projection, weight_2
+            )
+            # nudge the projection up if it isn't yet exceeding enough timepoints to hit its target percentile, down otherwise
+            nudged_projection = point_state["projected_distribution_ratio"] + (nudge_step if point_state["cumulative_occurrence_percentile"] < target_percentile else -nudge_step)
+            point_state["projected_distribution_ratio"] = Weighted_Average(
+                point_state["projected_distribution_ratio"], weight_1, nudged_projection, weight_2
+            )
+
+        # the three points are hunted independently with no ordering guarantee between them, which lets lower/upper cross the median and
+        # produce a degenerate (non-positive) spread in _Continuous_Voice_Profile_Bell_Curve_Projections; clamp them back into a valid order
+        median_point_state = bucket_state["median"]
+        median_point_state["projected_distribution_ratio"] = min(1.0, max(0.0, median_point_state["projected_distribution_ratio"]))
+        median_value = median_point_state["projected_distribution_ratio"]
+
+        lower_point_state = bucket_state["lower_standard_deviation"]
+        if lower_point_state["projected_distribution_ratio"] > median_value:
+            lower_point_state["projected_distribution_ratio"] = median_value
+
+        upper_point_state = bucket_state["upper_standard_deviation"]
+        if upper_point_state["projected_distribution_ratio"] < median_value:
+            upper_point_state["projected_distribution_ratio"] = median_value
+
+
+def _Continuous_Voice_Profile_Bell_Curve_Projections(state, voiced_frequency_bucket_centers):
+    # mirrors _Extract_Bell_Curve_Projections's (center, lower_standard_deviation, upper_standard_deviation) shape so it can drop straight into _Bell_Curve_Value_2
+    projections = []
+    for freq_center in voiced_frequency_bucket_centers:
+        bucket_state = state["buckets"][freq_center]
+        median_ratio = bucket_state["median"]["projected_distribution_ratio"]
+        lower_ratio = bucket_state["lower_standard_deviation"]["projected_distribution_ratio"]
+        upper_ratio = bucket_state["upper_standard_deviation"]["projected_distribution_ratio"]
+        projections.append((median_ratio, median_ratio - lower_ratio, upper_ratio - median_ratio))
+    return projections
+
+
+def _Continuous_Voice_Profile_Convergence_Values(state, voiced_frequency_bucket_centers, static_bell_curve_projections):
+    sums = {point_name: 0.0 for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
+    for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
+        static_center, static_lower_standard_deviation, static_upper_standard_deviation = static_bell_curve_projections[freq_index]
+        bucket_state = state["buckets"][freq_center]
+        live_median = bucket_state["median"]["projected_distribution_ratio"]
+        live_lower_standard_deviation = live_median - bucket_state["lower_standard_deviation"]["projected_distribution_ratio"]
+        live_upper_standard_deviation = bucket_state["upper_standard_deviation"]["projected_distribution_ratio"] - live_median
+        sums["median"] += -abs(live_median - static_center)
+        sums["lower_standard_deviation"] += -abs(live_lower_standard_deviation - static_lower_standard_deviation)
+        sums["upper_standard_deviation"] += -abs(live_upper_standard_deviation - static_upper_standard_deviation)
+    bucket_count = len(voiced_frequency_bucket_centers)
+    if bucket_count == 0:
+        return {point_name: 0.0 for point_name in sums}
+    return {point_name: value / bucket_count for point_name, value in sums.items()}
 
 
 def _Frequency_Colors(voiced_frequency_bucket_centers):
@@ -505,6 +591,66 @@ def Generate_All_Speaker_Overall_Chart(voice_ids, sequence_index, included_varia
     print(f"Element_Match_Contribution_Type_Explorer: all-speaker overall chart saved to '{output_path}'")
 
 
+def _Compute_Continuous_Voice_Profile_Convergence_Ylim(per_voice_results, sequence_count):
+    global_minimum = 0.0
+    for all_results in per_voice_results.values():
+        for sequence_index in range(sequence_count):
+            convergence = all_results.get(sequence_index, {}).get("continuous_voice_profile_convergence")
+            if not convergence:
+                continue
+            for values in convergence.values():
+                for value in values:
+                    if value < global_minimum:
+                        global_minimum = value
+    return (global_minimum, 0.0)
+
+
+def Generate_Continuous_Voice_Profile_Convergence_Chart(voice_ids, comparative_voices_audio_set, per_voice_results, ylim):
+    sequence_count = len(comparative_voices_audio_set)
+    figure, axes = pyplot.subplots(sequence_count, 1, figsize=(20, 5 * sequence_count))
+    if sequence_count == 1:
+        axes = [axes]
+
+    reference_all_results = per_voice_results[voice_ids[0]]
+
+    for sequence_index, axis in enumerate(axes):
+        speaker_segments = reference_all_results[sequence_index]["speaker_segments"]
+        sequence_label = _Build_Sequence_Display_Label(speaker_segments)
+        max_x_value = 0.0
+
+        for voice_id in voice_ids:
+            all_results = per_voice_results.get(voice_id)
+            if all_results is None:
+                continue
+            convergence = all_results[sequence_index].get("continuous_voice_profile_convergence")
+            if not convergence:
+                continue
+            color = Get_Speaker_Color(voice_id)
+            for point_name, _, line_style in _CONTINUOUS_VOICE_PROFILE_POINTS:
+                values = convergence[point_name]
+                bucket_x_values = _Make_X_Values(len(values))
+                if bucket_x_values:
+                    max_x_value = max(max_x_value, bucket_x_values[-1])
+                axis.plot(bucket_x_values, values, color=color, linestyle=line_style, linewidth=0.75, label=f"{voice_id} {point_name}")
+
+        _Draw_Speaker_Segment_Annotations(axis, speaker_segments, include_leading_line=True)
+
+        axis.set_ylim(ylim[0], ylim[1])
+        axis.set_xlim(0, max_x_value)
+        axis.set_title(f"continuous voice profile convergence | {sequence_label}")
+        axis.set_xlabel("Time (s)")
+        axis.set_ylabel("-|projected - actual|")
+        axis.legend(fontsize=7)
+        axis.axhline(0, color="black", linewidth=0.5)
+
+    pyplot.tight_layout()
+    voice_ids_suffix = "_".join(voice_ids)
+    output_path = Analysis_Directory + Analysis_Run_Name + f"_continuous_voice_profile_convergence_{voice_ids_suffix}.png"
+    pyplot.savefig(output_path, dpi=Chart_Image_Resolution, bbox_inches="tight")
+    pyplot.close()
+    print(f"Element_Match_Contribution_Type_Explorer: continuous voice profile convergence chart saved to '{output_path}'")
+
+
 # --- entry point ---
 
 def Load_Comparative_Voices_Audio_Set(conversation_json_file_name):
@@ -537,6 +683,23 @@ def Run_Element_Match_Contribution_Type_Exploration(
         print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['include_non_voiced_timepoints'] is True but 'use_signal_rate_simulation' is False; include_non_voiced_timepoints requires use_signal_rate_simulation and will be ignored for this run")
     include_non_voiced_timepoints = include_non_voiced_timepoints_hyperparameter and use_signal_rate_simulation
 
+    # alternative pathway: learns each voice's bell curve projections on-the-fly from its own speaking turns instead of looking them up from the persisted JSON
+    continuous_voice_profiling_hyperparameters = cross_type_hyperparameters.get("continuous_voice_profiling", {})
+    use_continuous_voice_profiling_hyperparameter = continuous_voice_profiling_hyperparameters.get("use_continuous_voice_profiling", False)
+    if use_continuous_voice_profiling_hyperparameter and not use_bell_curve:
+        print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_continuous_voice_profiling'] is True but 'use_bell_curve_percentile_projection' is False; continuous voice profiling requires bell curve percentile projection and will be ignored for this run")
+    use_continuous_voice_profiling = use_continuous_voice_profiling_hyperparameter and use_bell_curve
+
+    use_cumulative_signal_rate_distribution_ratios_hyperparameter = continuous_voice_profiling_hyperparameters.get("use_cumulative_signal_rate_distribution_ratios", False)
+    if use_cumulative_signal_rate_distribution_ratios_hyperparameter and not use_signal_rate_simulation:
+        print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_cumulative_signal_rate_distribution_ratios'] is True but 'use_signal_rate_simulation' is False; timepoint_ratio will be used instead of signal_rate_ratio for continuous voice profiling in this run")
+    use_cumulative_signal_rate_distribution_ratios = use_cumulative_signal_rate_distribution_ratios_hyperparameter and use_signal_rate_simulation
+
+    continue_voice_profiles_across_conversations = continuous_voice_profiling_hyperparameters.get("continue_voice_profiles_across_conversations", False)
+    voice_profile_timepoints_threshold = continuous_voice_profiling_hyperparameters.get("voice_profile_timepoints_threshold", 0)
+    projected_distribution_ratio_nudge_step = continuous_voice_profiling_hyperparameters.get("projected_distribution_ratio_nudge_step", 1.0)
+    voiced_timepoints_cumulation_weight_power = continuous_voice_profiling_hyperparameters.get("voiced_timepoints_cumulation_weight_power", 1.0)
+
     included_variants = [variant for variant in VARIANT_ORDER if aggregate_match_types.get(variant, {}).get("include_variant", False)]
     if not included_variants:
         print("Element_Match_Contribution_Type_Explorer: no variants included, aborting")
@@ -546,7 +709,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
     include_all_speaker_overall_chart = chart_type_inclusions.get("all_speaker_overall", False)
     include_per_speaker_overall_chart = chart_type_inclusions.get("per_speaker_overall", False)
     include_per_speaker_per_bucket_chart = chart_type_inclusions.get("per_speaker_per_bucket", False)
-    if not (include_combined_overall_chart or include_all_speaker_overall_chart or include_per_speaker_overall_chart or include_per_speaker_per_bucket_chart):
+    include_continuous_voice_profile_convergence_chart = chart_type_inclusions.get("continuous_voice_profile_convergence", False) and use_continuous_voice_profiling
+    if not (include_combined_overall_chart or include_all_speaker_overall_chart or include_per_speaker_overall_chart or include_per_speaker_per_bucket_chart or include_continuous_voice_profile_convergence_chart):
         print("Element_Match_Contribution_Type_Explorer: no chart types included, aborting")
         return
 
@@ -615,11 +779,17 @@ def Run_Element_Match_Contribution_Type_Exploration(
     def _Process_Sequences_For_Voice(voiced_frequency_bucket_centers, voiced_frequency_limit_index, inverted_occurrence_ratios, sorted_keys_per_bucket, bell_curve_projections, bucket_medians):
         all_results = {}
 
+        # if continuity across conversations is on, this voice's profile is created once here and mutated in place across every sequence below; otherwise it's recreated per-sequence further down
+        continuous_voice_profile_state = _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers) if (use_continuous_voice_profiling and continue_voice_profiles_across_conversations) else None
+
         for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set):
             cumulative_comparative_occurrence_ratios = {freq: [0.5] for freq in voiced_frequency_bucket_centers} if need_cumulative_comparative_occurrence_ratios else {}
             # both signal-rate running totals reset together at the start of every sequence, so a new conversation never inherits a stale denominator/numerator pairing from the previous one
             total_distribution_signal_rate = 0.0
             distribution_ratio_signal_rates = {freq: 0.0 for freq in voiced_frequency_bucket_centers}
+
+            if use_continuous_voice_profiling and not continue_voice_profiles_across_conversations:
+                continuous_voice_profile_state = _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers)
 
             match_contribution_weights = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_weighted_binary_match_contribution else {}
             weighted_binary_match_contributions = [-0.5] if include_weighted_binary_match_contribution else []
@@ -636,13 +806,45 @@ def Run_Element_Match_Contribution_Type_Exploration(
             element_accumulative_deviations = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_accumulative_deviation else {}
             average_element_accumulative_deviations = [0.0] if include_accumulative_deviation else []
 
+            continuous_voice_profile_convergence_values = (
+                {point_name: [math.nan] for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
+                if include_continuous_voice_profile_convergence_chart else {}
+            )
+
             speaker_segments = []
             processed_timepoint_count = 0
+
+            def _Append_Null_Timepoint_Outputs():
+                if need_cumulative_comparative_occurrence_ratios:
+                    for null_freq_center in voiced_frequency_bucket_centers:
+                        cumulative_comparative_occurrence_ratios[null_freq_center].append(math.nan)
+                if include_weighted_binary_match_contribution:
+                    for null_freq_center in voiced_frequency_bucket_centers:
+                        match_contribution_weights[null_freq_center].append(math.nan)
+                    weighted_binary_match_contributions.append(math.nan)
+                if need_occurrence_percentile_deviation_buckets:
+                    for null_freq_center in voiced_frequency_bucket_centers:
+                        occurrence_percentile_deviations[null_freq_center].append(math.nan)
+                if include_occurrence_percentile_deviation:
+                    average_occurrence_percentile_deviations.append(math.nan)
+                if include_occurrence_percentile_inverse_deviation:
+                    for null_freq_center in voiced_frequency_bucket_centers:
+                        occurrence_percentile_inverse_deviations[null_freq_center].append(math.nan)
+                    average_occurrence_percentile_inverse_deviations.append(math.nan)
+                if include_occurrence_percentile_half_distance:
+                    for null_freq_center in voiced_frequency_bucket_centers:
+                        occurrence_percentile_half_distances[null_freq_center].append(math.nan)
+                    average_occurrence_percentile_half_distances.append(math.nan)
+                if include_accumulative_deviation:
+                    for null_freq_center in voiced_frequency_bucket_centers:
+                        element_accumulative_deviations[null_freq_center].append(math.nan)
+                    average_element_accumulative_deviations.append(math.nan)
 
             for speaker_id, audio_list in sub_sequences:
                 segment_start_index = processed_timepoint_count + 1
                 # the very first valid timepoint of a turn where the speaker is the voice_id itself resets accumulative_deviation tracking to 0, rather than continuing from wherever it left off
                 pending_accumulative_deviation_reset = include_accumulative_deviation and accumulative_deviation_use_self_tracking_reset and speaker_id == voice_id
+                is_own_voice_turn = use_continuous_voice_profiling and speaker_id == voice_id
 
                 for audio_name in audio_list:
                     distribution, timepoint_phonemes = audio_cache[(speaker_id, audio_name)]
@@ -667,33 +869,46 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
                         if include_non_voiced_timepoints and total_distribution_signal_rate == 0.0:
                             # no voiced timepoint has been seen yet since the run (or the current sequence) started, so total_distribution_signal_rate is still exactly 0.0 — dividing by it below would be a divide-by-zero, so this timepoint is still included on the timeline but reported as no-value (NaN) across every tracked list instead of being computed
-                            if need_cumulative_comparative_occurrence_ratios:
-                                for null_freq_center in voiced_frequency_bucket_centers:
-                                    cumulative_comparative_occurrence_ratios[null_freq_center].append(math.nan)
-                            if include_weighted_binary_match_contribution:
-                                for null_freq_center in voiced_frequency_bucket_centers:
-                                    match_contribution_weights[null_freq_center].append(math.nan)
-                                weighted_binary_match_contributions.append(math.nan)
-                            if need_occurrence_percentile_deviation_buckets:
-                                for null_freq_center in voiced_frequency_bucket_centers:
-                                    occurrence_percentile_deviations[null_freq_center].append(math.nan)
-                            if include_occurrence_percentile_deviation:
-                                average_occurrence_percentile_deviations.append(math.nan)
-                            if include_occurrence_percentile_inverse_deviation:
-                                for null_freq_center in voiced_frequency_bucket_centers:
-                                    occurrence_percentile_inverse_deviations[null_freq_center].append(math.nan)
-                                average_occurrence_percentile_inverse_deviations.append(math.nan)
-                            if include_occurrence_percentile_half_distance:
-                                for null_freq_center in voiced_frequency_bucket_centers:
-                                    occurrence_percentile_half_distances[null_freq_center].append(math.nan)
-                                average_occurrence_percentile_half_distances.append(math.nan)
-                            if include_accumulative_deviation:
-                                for null_freq_center in voiced_frequency_bucket_centers:
-                                    element_accumulative_deviations[null_freq_center].append(math.nan)
-                                average_element_accumulative_deviations.append(math.nan)
+                            _Append_Null_Timepoint_Outputs()
+                            if include_continuous_voice_profile_convergence_chart:
+                                for point_name in continuous_voice_profile_convergence_values:
+                                    continuous_voice_profile_convergence_values[point_name].append(math.nan)
 
                             processed_timepoint_count += 1
                             continue
+
+                        if use_continuous_voice_profiling:
+                            # own-voice timepoints refine the live profile before it's (potentially) used to score this very timepoint, so the profile is always as fresh as possible
+                            if is_own_voice_turn and timepoint_is_voiced:
+                                own_turn_ratio_by_bucket = {}
+                                for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
+                                    if use_cumulative_signal_rate_distribution_ratios:
+                                        own_turn_ratio_by_bucket[freq_center] = distribution_ratio_signal_rates[freq_center] / total_distribution_signal_rate
+                                    else:
+                                        own_turn_ratio_by_bucket[freq_center] = float(distribution[freq_index][timepoint_index])
+                                _Update_Continuous_Voice_Profile(continuous_voice_profile_state, voiced_frequency_bucket_centers, own_turn_ratio_by_bucket, projected_distribution_ratio_nudge_step, voiced_timepoints_cumulation_weight_power)
+
+                            is_voice_profile_ready = continuous_voice_profile_state["voice_timepoints_count"] > voice_profile_timepoints_threshold
+
+                            if include_continuous_voice_profile_convergence_chart:
+                                if is_voice_profile_ready:
+                                    convergence_values = _Continuous_Voice_Profile_Convergence_Values(continuous_voice_profile_state, voiced_frequency_bucket_centers, bell_curve_projections)
+                                else:
+                                    convergence_values = {point_name: math.nan for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
+                                for point_name, value in convergence_values.items():
+                                    continuous_voice_profile_convergence_values[point_name].append(value)
+
+                            if not is_voice_profile_ready:
+                                # this voice hasn't accumulated enough of its own speaking turns yet for its live profile to be trustworthy, so it's effectively ignored for comparison purposes at this timepoint
+                                _Append_Null_Timepoint_Outputs()
+                                processed_timepoint_count += 1
+                                continue
+
+                            active_bell_curve_projections = _Continuous_Voice_Profile_Bell_Curve_Projections(continuous_voice_profile_state, voiced_frequency_bucket_centers)
+                            active_bucket_medians = [projection[0] for projection in active_bell_curve_projections] if need_bucket_medians else bucket_medians
+                        else:
+                            active_bell_curve_projections = bell_curve_projections
+                            active_bucket_medians = bucket_medians
 
                         timepoint_weighted_binary_match_contribution_weights = []
                         timepoint_weighted_binary_match_contribution_is_positive = []
@@ -709,7 +924,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                 if use_signal_rate_simulation:
                                     signal_rate_ratio = distribution_ratio_signal_rates[freq_center] / total_distribution_signal_rate
                                     if use_bell_curve:
-                                        center, lower_standard_deviation, upper_standard_deviation = bell_curve_projections[freq_index]
+                                        center, lower_standard_deviation, upper_standard_deviation = active_bell_curve_projections[freq_index]
                                         new_ratio = _Bell_Curve_Value_2(signal_rate_ratio, center, lower_standard_deviation, upper_standard_deviation)
                                     else:
                                         new_ratio = _Lookup_Closest_Value(
@@ -722,7 +937,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                         cumulative_comparative_occurrence_ratios[freq_center].append(new_ratio)
                                 else:
                                     if use_bell_curve:
-                                        center, lower_standard_deviation, upper_standard_deviation = bell_curve_projections[freq_index]
+                                        center, lower_standard_deviation, upper_standard_deviation = active_bell_curve_projections[freq_index]
                                         value_2 = _Bell_Curve_Value_2(timepoint_ratio, center, lower_standard_deviation, upper_standard_deviation)
                                     else:
                                         value_2 = _Lookup_Closest_Value(
@@ -777,7 +992,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                     current_timepoint_deviation = -1.0 * current_timepoint_percentile_deviation
 
                                 if not accumulative_deviation_use_non_directional_element_deviations:
-                                    if (new_ratio < 0.5) if use_signal_rate_simulation else (timepoint_ratio < bucket_medians[freq_index]):
+                                    if (new_ratio < 0.5) if use_signal_rate_simulation else (timepoint_ratio < active_bucket_medians[freq_index]):
                                         current_timepoint_deviation *= -1.0
 
                                 previous_element_accumulative_deviation_raw = element_accumulative_deviations[freq_center][-1]
@@ -845,6 +1060,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
             if include_accumulative_deviation:
                 speaker_data["element_accumulative_deviations"] = element_accumulative_deviations
                 speaker_data["average_element_accumulative_deviations"] = average_element_accumulative_deviations
+            if include_continuous_voice_profile_convergence_chart:
+                speaker_data["continuous_voice_profile_convergence"] = continuous_voice_profile_convergence_values
             all_results[sequence_index] = speaker_data
 
         return all_results
@@ -932,5 +1149,9 @@ def Run_Element_Match_Contribution_Type_Exploration(
         for sequence_index in range(len(comparative_voices_audio_set)):
             speaker_segments = reference_all_results[sequence_index]["speaker_segments"]
             Generate_All_Speaker_Overall_Chart(successful_voice_ids, sequence_index, included_variants, all_speaker_overall_ylims, per_voice_results, speaker_segments, metric_inclusions)
+
+    if include_continuous_voice_profile_convergence_chart:
+        convergence_ylim = _Compute_Continuous_Voice_Profile_Convergence_Ylim(per_voice_results, len(comparative_voices_audio_set))
+        Generate_Continuous_Voice_Profile_Convergence_Chart(successful_voice_ids, comparative_voices_audio_set, per_voice_results, convergence_ylim)
 
     print(f"Element_Match_Contribution_Type_Explorer: exploration complete for voice_ids {successful_voice_ids}")
