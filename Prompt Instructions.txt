@@ -800,13 +800,25 @@ Basically, the speaker <-> voice profile aggregate_match_type lines for periods 
 
 What is causing this? Each speaker period should be compared to all voice_ids that have surpassed the voice_profile_timepoints_threshold, so I would expect there to be meaningful change in speaker <-> voice aggregate_match values across all eligible voice_ids during each speaker period.
 
+--------------------------
 
+Okay, let's start by trying a combination of the clamping as well as a reduction in nudge step size. For the clamping, let's go with:
+    1) If median_ratio is lower than 0.0 or higher than 1.0, then set it to 0.0 or 1.0
+    2) If lower_ratio is higher than median_ratio, set it to median_ratio
+    3) If upper_ratio is lower than median_ratio, set it to median_ratio
+
+And for the nudge step size, add a hyperparameter for that in the continuous_voice_profiling sub-dictionary of cross_type_hyperparameters so that it is explicitly surfaced and adjustable. If you want to do a test run, I'm thinking maybe try setting it to 0.01 as a start to see what happens.
+
+--------------------------
+
+Ah okay, that is a useful mathematical analysis of the shrinking weight_2 speed, thanks for surfacing that. For the actual data I suspect that 0.01 would be a better default nudge_step size than 0.1 since the average frequency_bucket distribution_ratio median would be (1 / [number of frequency_buckets]) which will be significantly smaller than 0.3. However, I think the harmonic weight_2 shrinking is a big enough issue that it should be addressed directly instead of just trying to set compatible nudge_step sizes.
+
+How about adding another new continuous_voice_profiling hyperparameter "voiced_timepoints_cumulation_weight_power". Then, rather than the cumulative_occurrence_percentile and projected_distribution_ratio update weight calculations being (1 - (1/voiced_timepoints_count)) and (1/voiced_timepoints_count), they become (1 - (1/(voiced_timepoints_count^voiced_timepoints_cumulation_weight_power))) and (1/(voiced_timepoints_count^voiced_timepoints_cumulation_weight_power)).
+
+That way if voiced_timepoints_cumulation_weight_power is set to, say, 0.5, then weight_2 will shrink as a function of the square root of voiced_timepoints_count rather than as a function of voiced_timepoints_count directly.
 
 
 ************************************NOTE: IT LOOKS LIKE SOMETHING IS GOING WRONG (LIKE MATH LOGIC BUG WRONG) WITH THE AGGREGATE_MATCH_TYPE CALCULATIONS WITH THE NEW CONTINUOUS PROFILE DEVELOPMENT LOGIC. SPECIFICALLY, EVERY NON-VOICE SPEAKER'S DEVIATION DISTANCES MORE-OR-LESS (THOUGH NOTABLY NOT COMPLETELY) 'FREEZE' DURING NON-SPEAKER-VOICE TURN PERIODS, WITH ONLY THE VOICE-CORRESPONDING SPEAKER SCORE ACTUALLY MEANINGFULLY CHANGING DURING THOSE PERIODS.
-
-
-
 
 
 *************SELF NOTE****************
@@ -823,15 +835,37 @@ So, use_cumulative_signal_rate_distribution_ratios is intended to provide a togg
 Notably, I tentatively think that use_cumulative_signal_rate_distribution_ratios should necessarily be set to False when producing the convergence comparison charts, since those charts inherently use the timepoint_ratio-based non-cumulative occurrence_percentile lookups as convergence reference values.
 
 
+-------------------------------------------------------------------------------------------------------
 
 
+Next, I want you to implement an extension to the Element_Match_Contribution_Type_Explorer module. The goal of this extension is to add a new aggregate_match_type variant option called "deviation_scaled_percentile_proximity" alongside the five aggregate_match_type variants that are already implemented. The logic for the deviation_scaled_percentile_proximity variant shares some logic with the other currently implemented variants, but also has some distinctive differences. Feel free to reference or reuse existing code where appropriate, or to add new variant-specific code where that is more straightforward.
 
+Like the other variants, deviation_scaled_percentile_proximity should have a dedicated sub-dictionary in the aggregate_match_types input dictionary to the Run_Element_Match_Contribution_Type_Exploration() function. An example of what the deviation_scaled_percentile_proximity sub-dictionary might look like is:
 
+"deviation_scaled_percentile_proximity":{
+    "include_variant": True,
+    "hyperparameters": {
+        "percentile_proximity_power_curve": 1.5,
+        "deviation_scaling_power_curve": 0.8
+    }
+}
 
+The deviation_scaled_percentile_proximity variant should only be run when its include_variant is True and use_bell_curve_percentile_projection within cross_type_hyperparameters is True. When include_variant is True but use_bell_curve_percentile_projection is False, do not run the deviation_scaled_percentile_proximity variant, and raise a warning alerting the user.
 
+Similarly to the other variants, for each speaker_id in comparative_voices_audio_set the deviation_scaled_percentile_proximity variant should have a variable structured as a dictionary<frequency_center, list<float>> called deviation_scaled_percentile_proximities, and a variable structured as a list<float> called average_deviation_scaled_percentile_proximities. The single initial value set for each list in these variables should be 0.0.
 
+Also similarly to the other variants, for each frequency_center for each timepoint there will be a new value calculated and appended to the list for the corresponding frequency_center entry in deviation_scaled_percentile_proximities. Like the occurrence_percentile_inverse_deviation and occurrence_percentile_half_distance variants, this new value can be calculated as a function of the deviation variable returned by the _Occurrence_Percentile_Deviation() function along with the two variant-specific deviation_scaled_percentile_proximity hyperparameters. Although, calculating this new value will additionally require the lower_standard_deviation or upper_standard_deviation (depending on whether new_ratio is below or above 0.5). The actual calculation logic is as follows: 
+    1) percentile_proximity = 1.0 - (deviation ** percentile_proximity_power_curve)
+    2) bell_curve_deviation_scaling_multiplier = (1.0 / ([lower_standard_deviation or upper_standard_deviation]) ** deviation_scaling_power_curve)
+    3) new deviation_scaled_percentile_proximities = percentile_proximity * bell_curve_deviation_scaling_multiplier
 
+As a brief explanation of the purpose of this calculation, essentially what it intended to do is to scale how strongly each particular frequency_center contributes to a match between a speaker profile and a perceived speaker by how narrow the distribution for that frequency_center is for that speaker profile. So, for example, if the "FCJF0" voice profile has a has a standard deviation of 0.01 for a particular frequency_center while the "MEDR0" voice profile has a standard deviation of 0.1 for that frequency_center, then a timepoint with a frequency_center value that is at the 55th percentile for both voice profiles will produce a deviation-scaled percentile proximity value that is 10 times as high for FCJF0 than for MEDR0 (if bell_curve_deviation_scaling_multiplier is set to 1.0). The point of this is to reward / amplify close-to-median frequency_center percentiles for voice profiles where the distribution for that frequency_center is smaller and therefore more specific / selective.
 
+Moving on, the deviation_scaled_percentile_proximity variant should be displayed in chart subplots in a similar way to the other variants. Its y-axis minimum should be 0.0, and its y-axis maximum should be whatever the highest value is across all processed audio sequences.
+
+One notable difference between deviation_scaled_percentile_proximity and other current aggregate_match_types is that deviation_scaled_percentile_proximity does not have a capped maximum possible value of 0, since the bell_curve_deviation_scaling_multiplier can potentially produce indefinitely high values and so cannot be straightforwardly converted into a form with 0 maximum bound. I think that all of three of the current metric types (match_ratio, transition_duration, match_differentiation) should still be calculable as-is for deviation_scaled_percentile_proximity anyway. However, deviation_scaled_percentile_proximity should not (for now) be added as a deviation_type option for the accumulative_deviation aggregate_match_type, since that implicitly has to be 0-capped in order for accumulative_deviation to function properly.
+
+Let me know if anything is unclear or ambiguous, or if I am missing anything that this new variant logic would need to account for. Otherwise, implement the new deviation_scaled_percentile_proximity variant and then I will test it out.
 
 
 

@@ -27,6 +27,7 @@ VARIANT_ORDER = [
     "occurrence_percentile_inverse_deviation",
     "occurrence_percentile_half_distance",
     "accumulative_deviation",
+    "deviation_scaled_percentile_proximity",
 ]
 
 # (point_name, target_percentile, line_style) — shared by continuous voice profiling and its convergence chart
@@ -48,6 +49,7 @@ _OVERALL_KEYS = {
     "occurrence_percentile_inverse_deviation": "average_occurrence_percentile_inverse_deviations",
     "occurrence_percentile_half_distance": "average_occurrence_percentile_half_distances",
     "accumulative_deviation": "average_element_accumulative_deviations",
+    "deviation_scaled_percentile_proximity": "average_deviation_scaled_percentile_proximities",
 }
 
 _PER_BUCKET_KEYS = {
@@ -56,6 +58,7 @@ _PER_BUCKET_KEYS = {
     "occurrence_percentile_inverse_deviation": "occurrence_percentile_inverse_deviations",
     "occurrence_percentile_half_distance": "occurrence_percentile_half_distances",
     "accumulative_deviation": "element_accumulative_deviations",
+    "deviation_scaled_percentile_proximity": "deviation_scaled_percentile_proximities",
 }
 
 
@@ -223,6 +226,17 @@ def _Occurrence_Percentile_Half_Distance(deviation, minimum):
     return max(-1.0 * (math.log(closeness) / _LOG_0_5), minimum)
 
 
+def _Deviation_Scaled_Percentile_Proximity(deviation, ratio, lower_standard_deviation, upper_standard_deviation, percentile_proximity_power_curve, deviation_scaling_power_curve):
+    # ratio here is the percentile-space value (new_ratio/value_2, itself already centered on 0.5), not the raw bell-curve center — so the below/above split is against 0.5, matching accumulative_deviation's own directional check
+    standard_deviation = lower_standard_deviation if ratio < 0.5 else upper_standard_deviation
+    # deviation is 0..1, so percentile_proximity is 0..1 (0 = worst, 1 = best) — never negative, unlike the other deviation-based variants
+    percentile_proximity = 1.0 - (deviation ** percentile_proximity_power_curve)
+    # a zero (or degenerate negative) standard deviation would make the scaling multiplier's exponentiation divide-by-zero; floor it at a tiny epsilon so an extremely narrow bucket produces a very large multiplier instead of raising
+    standard_deviation = max(standard_deviation, 1e-15)
+    bell_curve_deviation_scaling_multiplier = 1.0 / (standard_deviation ** deviation_scaling_power_curve)
+    return percentile_proximity * bell_curve_deviation_scaling_multiplier
+
+
 # --- global bounds computation ---
 
 def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound, accumulative_deviation_hyperparameters=None, chart_y_minimums=None):
@@ -230,9 +244,18 @@ def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucke
     per_bucket_ylims = {}
     chart_y_minimums = chart_y_minimums or {}
 
-    # every variant now shares the same "0 is best, negative is worst" overall scale, so the true observed minimum is computed identically for all of them (NaN entries — from leading non-voiced timepoints — are silently skipped, since any comparison against NaN is False) and then floored at that variant's chart_y_minimum, if one is set and the observed minimum would otherwise be lower
+    # every variant except deviation_scaled_percentile_proximity shares the same "0 is best, negative is worst" overall scale, so the true observed minimum is computed identically for all of them (NaN entries — from leading non-voiced timepoints — are silently skipped, since any comparison against NaN is False) and then floored at that variant's chart_y_minimum, if one is set and the observed minimum would otherwise be lower
     for variant in included_variants:
         key = _OVERALL_KEYS[variant]
+        if variant == "deviation_scaled_percentile_proximity":
+            # this variant is never negative and has no capped maximum (the scaling multiplier can grow indefinitely for narrow buckets), so its axis is pinned at 0.0 on the bottom and the observed maximum on top instead
+            global_maximum = 0.0
+            for data in all_results.values():
+                for value in data[key]:
+                    if value > global_maximum:
+                        global_maximum = value
+            overall_ylims[variant] = (0.0, global_maximum)
+            continue
         global_minimum = 0.0
         for data in all_results.values():
             for value in data[key]:
@@ -278,6 +301,16 @@ def _Compute_Global_Ylims(included_variants, all_results, voiced_frequency_bucke
                             if abs(value) > absolute_maximum:
                                 absolute_maximum = abs(value)
                 per_bucket_ylims[variant] = (-absolute_maximum, absolute_maximum)
+        elif variant == "deviation_scaled_percentile_proximity":
+            key = _PER_BUCKET_KEYS[variant]
+            global_maximum = 0.0
+            for data in all_results.values():
+                per_bucket = data.get(key, {})
+                for freq in voiced_frequency_bucket_centers:
+                    for value in per_bucket.get(freq, []):
+                        if value > global_maximum:
+                            global_maximum = value
+            per_bucket_ylims[variant] = (0.0, global_maximum)
         else:
             key = _PER_BUCKET_KEYS[variant]
             global_minimum = 0.0
@@ -700,7 +733,17 @@ def Run_Element_Match_Contribution_Type_Exploration(
     projected_distribution_ratio_nudge_step = continuous_voice_profiling_hyperparameters.get("projected_distribution_ratio_nudge_step", 1.0)
     voiced_timepoints_cumulation_weight_power = continuous_voice_profiling_hyperparameters.get("voiced_timepoints_cumulation_weight_power", 1.0)
 
-    included_variants = [variant for variant in VARIANT_ORDER if aggregate_match_types.get(variant, {}).get("include_variant", False)]
+    # deviation_scaled_percentile_proximity's per-bucket calculation needs the bell curve's lower/upper standard deviation, so unlike every other variant its inclusion also depends on use_bell_curve_percentile_projection
+    deviation_scaled_percentile_proximity_requested = aggregate_match_types.get("deviation_scaled_percentile_proximity", {}).get("include_variant", False)
+    if deviation_scaled_percentile_proximity_requested and not use_bell_curve:
+        print("Element_Match_Contribution_Type_Explorer: WARNING - aggregate_match_types['deviation_scaled_percentile_proximity']['include_variant'] is True but cross_type_hyperparameters['use_bell_curve_percentile_projection'] is False; deviation_scaled_percentile_proximity requires bell curve percentile projection and will be excluded from this run")
+
+    def _Is_Variant_Included(variant):
+        if variant == "deviation_scaled_percentile_proximity":
+            return deviation_scaled_percentile_proximity_requested and use_bell_curve
+        return aggregate_match_types.get(variant, {}).get("include_variant", False)
+
+    included_variants = [variant for variant in VARIANT_ORDER if _Is_Variant_Included(variant)]
     if not included_variants:
         print("Element_Match_Contribution_Type_Explorer: no variants included, aborting")
         return
@@ -727,6 +770,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
     include_occurrence_percentile_inverse_deviation = "occurrence_percentile_inverse_deviation" in included_variants
     include_occurrence_percentile_half_distance = "occurrence_percentile_half_distance" in included_variants
     include_accumulative_deviation = "accumulative_deviation" in included_variants
+    include_deviation_scaled_percentile_proximity = "deviation_scaled_percentile_proximity" in included_variants
     need_cumulative_comparative_occurrence_ratios = (
         include_weighted_binary_match_contribution or include_occurrence_percentile_deviation
         or include_occurrence_percentile_inverse_deviation or include_occurrence_percentile_half_distance
@@ -759,6 +803,11 @@ def Run_Element_Match_Contribution_Type_Exploration(
         accumulative_deviation_use_non_directional_element_deviations = accumulative_deviation_hyperparameters["use_non_directional_element_deviations"]
         accumulative_deviation_use_average_element_deviations = accumulative_deviation_hyperparameters["use_average_element_deviations"]
         accumulative_deviation_use_self_tracking_reset = accumulative_deviation_hyperparameters["use_self_tracking_reset"]
+
+    deviation_scaled_percentile_proximity_hyperparameters = aggregate_match_types.get("deviation_scaled_percentile_proximity", {}).get("hyperparameters", {})
+    if include_deviation_scaled_percentile_proximity:
+        deviation_scaled_percentile_proximity_percentile_proximity_power_curve = deviation_scaled_percentile_proximity_hyperparameters["percentile_proximity_power_curve"]
+        deviation_scaled_percentile_proximity_deviation_scaling_power_curve = deviation_scaled_percentile_proximity_hyperparameters["deviation_scaling_power_curve"]
 
     need_percentile_deviation_for_accumulative_deviation = include_accumulative_deviation
     need_bucket_medians = include_accumulative_deviation and not accumulative_deviation_use_non_directional_element_deviations
@@ -806,6 +855,9 @@ def Run_Element_Match_Contribution_Type_Exploration(
             element_accumulative_deviations = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_accumulative_deviation else {}
             average_element_accumulative_deviations = [0.0] if include_accumulative_deviation else []
 
+            deviation_scaled_percentile_proximities = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_deviation_scaled_percentile_proximity else {}
+            average_deviation_scaled_percentile_proximities = [0.0] if include_deviation_scaled_percentile_proximity else []
+
             continuous_voice_profile_convergence_values = (
                 {point_name: [math.nan] for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
                 if include_continuous_voice_profile_convergence_chart else {}
@@ -839,6 +891,10 @@ def Run_Element_Match_Contribution_Type_Exploration(
                     for null_freq_center in voiced_frequency_bucket_centers:
                         element_accumulative_deviations[null_freq_center].append(math.nan)
                     average_element_accumulative_deviations.append(math.nan)
+                if include_deviation_scaled_percentile_proximity:
+                    for null_freq_center in voiced_frequency_bucket_centers:
+                        deviation_scaled_percentile_proximities[null_freq_center].append(math.nan)
+                    average_deviation_scaled_percentile_proximities.append(math.nan)
 
             for speaker_id, audio_list in sub_sequences:
                 segment_start_index = processed_timepoint_count + 1
@@ -916,11 +972,12 @@ def Run_Element_Match_Contribution_Type_Exploration(
                         timepoint_occurrence_percentile_inverse_deviations = []
                         timepoint_occurrence_percentile_half_distances = []
                         timepoint_element_accumulative_deviations = []
+                        timepoint_deviation_scaled_percentile_proximities = []
 
                         for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
                             timepoint_ratio = float(distribution[freq_index][timepoint_index])
 
-                            if need_cumulative_comparative_occurrence_ratios or need_percentile_deviation_for_accumulative_deviation:
+                            if need_cumulative_comparative_occurrence_ratios or need_percentile_deviation_for_accumulative_deviation or include_deviation_scaled_percentile_proximity:
                                 if use_signal_rate_simulation:
                                     signal_rate_ratio = distribution_ratio_signal_rates[freq_center] / total_distribution_signal_rate
                                     if use_bell_curve:
@@ -973,6 +1030,17 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                     half_distance = _Occurrence_Percentile_Half_Distance(deviation, occurrence_percentile_half_distance_hyperparameters["half_distance_minimum"])
                                     occurrence_percentile_half_distances[freq_center].append(half_distance)
                                     timepoint_occurrence_percentile_half_distances.append(half_distance)
+
+                            if include_deviation_scaled_percentile_proximity:
+                                deviation_scaled_percentile_proximity_ratio = new_ratio if use_signal_rate_simulation else value_2
+                                deviation_scaled_percentile_proximity_deviation = _Occurrence_Percentile_Deviation(deviation_scaled_percentile_proximity_ratio)
+                                deviation_scaled_percentile_proximity_value = _Deviation_Scaled_Percentile_Proximity(
+                                    deviation_scaled_percentile_proximity_deviation, deviation_scaled_percentile_proximity_ratio,
+                                    lower_standard_deviation, upper_standard_deviation,
+                                    deviation_scaled_percentile_proximity_percentile_proximity_power_curve, deviation_scaled_percentile_proximity_deviation_scaling_power_curve
+                                )
+                                deviation_scaled_percentile_proximities[freq_center].append(deviation_scaled_percentile_proximity_value)
+                                timepoint_deviation_scaled_percentile_proximities.append(deviation_scaled_percentile_proximity_value)
 
                             if include_accumulative_deviation:
                                 current_timepoint_percentile_deviation = _Occurrence_Percentile_Deviation(new_ratio if use_signal_rate_simulation else value_2)
@@ -1036,6 +1104,12 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                 if timepoint_element_accumulative_deviations else 0.0
                             )
 
+                        if include_deviation_scaled_percentile_proximity:
+                            average_deviation_scaled_percentile_proximities.append(
+                                sum(timepoint_deviation_scaled_percentile_proximities) / len(timepoint_deviation_scaled_percentile_proximities)
+                                if timepoint_deviation_scaled_percentile_proximities else 0.0
+                            )
+
                         processed_timepoint_count += 1
 
                 segment_end_index = processed_timepoint_count + 1
@@ -1060,6 +1134,9 @@ def Run_Element_Match_Contribution_Type_Exploration(
             if include_accumulative_deviation:
                 speaker_data["element_accumulative_deviations"] = element_accumulative_deviations
                 speaker_data["average_element_accumulative_deviations"] = average_element_accumulative_deviations
+            if include_deviation_scaled_percentile_proximity:
+                speaker_data["deviation_scaled_percentile_proximities"] = deviation_scaled_percentile_proximities
+                speaker_data["average_deviation_scaled_percentile_proximities"] = average_deviation_scaled_percentile_proximities
             if include_continuous_voice_profile_convergence_chart:
                 speaker_data["continuous_voice_profile_convergence"] = continuous_voice_profile_convergence_values
             all_results[sequence_index] = speaker_data

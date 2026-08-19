@@ -44,12 +44,12 @@ Conversational_Layered_Subdistribution_Audio_Set = [
 ]
 
 
-#Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
-Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
+Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
+#Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
 #Conversational_Speaker_Audio_Set_File_Name = "FDML0_0o4_MEDR0_0o3_MGRL0_0o2_MDAC0_0o1_50o0.json"
 
-#Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0"]
-Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0"]
+Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0", "UNIVERSAL"]
+#Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0", "UNIVERSAL"]
 #Conversational_Tracked_Voice_List = ["FDML0", "MEDR0", "MGRL0", "MDAC0"]
 
 New_Partial_Speaker_Audio_Set = {
@@ -132,6 +132,13 @@ def Run_Element_Match_Contribution_Type_Analysis():
                     "chart_y_minimum": -10.0
                 }
             },
+            "deviation_scaled_percentile_proximity": {
+                "include_variant": True,
+                "hyperparameters": {
+                    "percentile_proximity_power_curve": 2.0,
+                    "deviation_scaling_power_curve": 1.0,
+                }
+            },
             "accumulative_deviation":{
                 "include_variant": True,
                 "hyperparameters": {
@@ -151,7 +158,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "occurrence_ratio_cumulation_half_life": 1.0,
             "voice_profile_cumulation_half_life": None,
             "continuous_voice_profiling":{
-                "use_continuous_voice_profiling": True,
+                "use_continuous_voice_profiling": False,
                 "continue_voice_profiles_across_conversations": True,
                 "use_cumulative_signal_rate_distribution_ratios": True,
                 "voice_profile_timepoints_threshold": 50,
@@ -164,7 +171,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "all_speaker_overall": True,
             "per_speaker_overall": False,
             "per_speaker_per_bucket": False,
-            "continuous_voice_profile_convergence": True,
+            "continuous_voice_profile_convergence": False,
         },
         metric_inclusions={
             "match_ratio": True,
