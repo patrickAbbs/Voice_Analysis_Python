@@ -16,6 +16,7 @@ from Layered_Subdistribution_Generator import Load_Layered_State, Get_Voiced_Fre
 from Color_Assignment_Manager import Get_Speaker_Color
 from Global_Helper_Functions import Convert_Half_Life_To_Cumulation_Weight, Weighted_Average
 from Simulated_Conversation_Generator import Conversation_Sequence_Json_Directory
+from Match_Contribution_Run_Comparer import Record_Run_Configuration
 
 
 _SQRT2 = math.sqrt(2.0)
@@ -26,8 +27,8 @@ VARIANT_ORDER = [
     "occurrence_percentile_deviation",
     "occurrence_percentile_inverse_deviation",
     "occurrence_percentile_half_distance",
-    "accumulative_deviation",
     "deviation_scaled_percentile_proximity",
+    "accumulative_deviation",
 ]
 
 # (point_name, target_percentile, line_style) — shared by continuous voice profiling and its convergence chart
@@ -704,6 +705,9 @@ def Run_Element_Match_Contribution_Type_Exploration(
     chart_type_inclusions,
     metric_inclusions
 ):
+    if not Record_Run_Configuration(voice_ids, conversation_json_file_name, aggregate_match_types, cross_type_hyperparameters, chart_type_inclusions, metric_inclusions):
+        return
+
     comparative_voices_audio_set = Load_Comparative_Voices_Audio_Set(conversation_json_file_name)
 
     occurrence_ratio_cumulation_weight = Convert_Half_Life_To_Cumulation_Weight(

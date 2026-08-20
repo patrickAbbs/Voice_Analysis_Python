@@ -14,6 +14,7 @@ from Voice_Subdistribution_Deviation_Tracker import Run_Voice_Subdistribution_De
 from Element_Match_Contribution_Type_Explorer import Run_Element_Match_Contribution_Type_Exploration
 from Occurrence_Ratio_Percentile_Shape_Visualizer import Visualize_Occurrence_Ratio_Percentile_Shapes
 from Simulated_Conversation_Generator import Generate_Simulated_Conversation_Set
+from Match_Contribution_Run_Comparer import Compare_Match_Contribution_Runs
 
 Layered_Subdistribution_Audio_Set = {
     "FCJF0": ["SA1", "SA2", "SI648", "SI1027", "SI1657", "SX37", "SX127", "SX217", "SX307", "SX397"], 
@@ -44,12 +45,12 @@ Conversational_Layered_Subdistribution_Audio_Set = [
 ]
 
 
-Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
-#Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
+#Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
+Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
 #Conversational_Speaker_Audio_Set_File_Name = "FDML0_0o4_MEDR0_0o3_MGRL0_0o2_MDAC0_0o1_50o0.json"
 
-Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0", "UNIVERSAL"]
-#Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0", "UNIVERSAL"]
+#Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0", "UNIVERSAL"]
+Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0", "UNIVERSAL"]
 #Conversational_Tracked_Voice_List = ["FDML0", "MEDR0", "MGRL0", "MDAC0"]
 
 New_Partial_Speaker_Audio_Set = {
@@ -85,7 +86,7 @@ def Run_Analysis():
 def Run_Subdstributions():
     #Run_Layered_Occurrence_Count_Population(Layered_Subdistribution_Audio_Set, Subdistribution_Layer)
     #Run_Layered_Occurrence_Count_Population(New_Partial_Speaker_Audio_Set, Subdistribution_Layer)
-    Run_Layered_Occurrence_Count_Population(Layered_Subdistribution_Audio_Set, Subdistribution_Layer, frequency_ratio_cumulation_half_life = 0.2)
+    Run_Layered_Occurrence_Count_Population(Layered_Subdistribution_Audio_Set, Subdistribution_Layer, frequency_ratio_cumulation_half_life = 1.0)
     #Run_Layered_Subdistribution_Generation(Subdistribution_Layer)
     #Run_Layered_Subdistribution_Generation("voice", voice_set=["FCJF0", "MEDR0", "MCPM0", "FDAW0", "FDML0", "MDAC0", "FECD0", "MDPK0"], allow_negative_subtractive_subdistributions=True, generate_original_subdistribution_charts=True, generate_subtractive_subdistribution_charts=False)
     #Run_Layered_Subdistribution_Generation("phoneme", phoneme_set=["ae", "ay", "ix", "iy"], allow_negative_subtractive_subdistributions=True, generate_original_subdistribution_charts=True, generate_subtractive_subdistribution_charts=True)
@@ -158,12 +159,12 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "occurrence_ratio_cumulation_half_life": 1.0,
             "voice_profile_cumulation_half_life": None,
             "continuous_voice_profiling":{
-                "use_continuous_voice_profiling": False,
+                "use_continuous_voice_profiling": True,
                 "continue_voice_profiles_across_conversations": True,
                 "use_cumulative_signal_rate_distribution_ratios": True,
                 "voice_profile_timepoints_threshold": 50,
-                "projected_distribution_ratio_nudge_step": 0.01,
-                "voiced_timepoints_cumulation_weight_power": 0.75
+                "projected_distribution_ratio_nudge_step": 0.002,
+                "voiced_timepoints_cumulation_weight_power": 0.5
             }
         },
         chart_type_inclusions={
@@ -171,7 +172,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "all_speaker_overall": True,
             "per_speaker_overall": False,
             "per_speaker_per_bucket": False,
-            "continuous_voice_profile_convergence": False,
+            "continuous_voice_profile_convergence": True,
         },
         metric_inclusions={
             "match_ratio": True,
@@ -192,11 +193,16 @@ def Generate_Conversation():
                                         conversation_duration_seeds={"base_duration": 50.0, "deviation_ratio": 0.9, "power_curve": 0.5}
                                         )
 
+def Run_Match_Contribution_Run_Comparison():
+    Compare_Match_Contribution_Runs(["6000_continuous_rate_test_1", "6000_continuous_rate_test_2", "6000_continuous_rate_test_3", "6000_continuous_rate_test_4"])
+
 #Run_Analysis()
 #Run_Subdstributions()
 #Run_Subtractive_Subdstributions()
 #Run_Voice_Subdistribution_Deviation_Analysis()
-Run_Element_Match_Contribution_Type_Analysis()
+#Run_Element_Match_Contribution_Type_Analysis()
+
+Run_Match_Contribution_Run_Comparison()
 
 #Run_Visualize_Occurrence_Ratio_Percentile_Shapes()
 

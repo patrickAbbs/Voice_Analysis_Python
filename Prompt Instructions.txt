@@ -818,9 +818,6 @@ How about adding another new continuous_voice_profiling hyperparameter "voiced_t
 That way if voiced_timepoints_cumulation_weight_power is set to, say, 0.5, then weight_2 will shrink as a function of the square root of voiced_timepoints_count rather than as a function of voiced_timepoints_count directly.
 
 
-************************************NOTE: IT LOOKS LIKE SOMETHING IS GOING WRONG (LIKE MATH LOGIC BUG WRONG) WITH THE AGGREGATE_MATCH_TYPE CALCULATIONS WITH THE NEW CONTINUOUS PROFILE DEVELOPMENT LOGIC. SPECIFICALLY, EVERY NON-VOICE SPEAKER'S DEVIATION DISTANCES MORE-OR-LESS (THOUGH NOTABLY NOT COMPLETELY) 'FREEZE' DURING NON-SPEAKER-VOICE TURN PERIODS, WITH ONLY THE VOICE-CORRESPONDING SPEAKER SCORE ACTUALLY MEANINGFULLY CHANGING DURING THOSE PERIODS.
-
-
 *************SELF NOTE****************
 The use_cumulative_signal_rate_distribution_ratios hyperparameter is intended to provide an on | off toggle option for a somewhat convoluted part of current module logic that warrants some explicit explanation.
 
@@ -867,7 +864,56 @@ One notable difference between deviation_scaled_percentile_proximity and other c
 
 Let me know if anything is unclear or ambiguous, or if I am missing anything that this new variant logic would need to account for. Otherwise, implement the new deviation_scaled_percentile_proximity variant and then I will test it out.
 
+-------------------------------------------------------------------------------------------------------
 
+Next, I want you to implement a new module called Match_Contribution_Run_Comparer. The purpose of this module is provide functionality for straightforwardly comparing the configurations, hyperparameter settings, and measured results of different user runs of the Run_Element_Match_Contribution_Type_Exploration() function (although to start with we will start pretty simple with just hyperparameter comparison, and then likely expand on the module more later).
 
+As a pre-step before getting to the actual module functionality, split out the Analysis_Directory variable in Global_Hyperparameters.py into two variables Analysis_Directory_Path and Analysis_Directory_Folder. Analysis_Directory_Path should contain all of the path information except for the final folder (so as Analysis_Directory is currently set this would be "tmp/media/layered_subdistributions/"), while Analysis_Directory_Folder should contain only the final folder name (so as Analysis_Directory is currently set this would be "6000_continuous_rate_test_1o0"). An equivalent to the "Analysis_Directory" variable as it currently exists can then be constructed by combining these Analysis_Directory_Path and Analysis_Directory_Folder and adding a "/" to the end.
+
+Moving on to the logic for the new Match_Contribution_Run_Comparer module, the first piece of functionality for the Match_Contribution_Run_Comparer module is to save information about each Run_Element_Match_Contribution_Type_Exploration() run. To do this, create and save a JSON file called "run_configuration.json" to the same analysis director folder that the output charts are saved to. This run_configuration.json file should contain all of the information contained in the input parameters to the Run_Element_Match_Contribution_Type_Exploration() function call. 
+
+Because a user can potentially call Run_Element_Match_Contribution_Type_Exploration() multiple times with the same analysis directory setting, there are a few different rules for how to handle storing and updating information for the different input parameters to accommodate potential multiple same-Analysis-directory Run_Element_Match_Contribution_Type_Exploration() calls, where for each run after the first one the run_configuration.json file will already exist for that analysis directory.
+
+First, for the aggregate_match_types, cross_type_hyperparameters, chart_type_inclusions, and metric_inclusions parameters, if there is any difference between how they are set in a new run and what their stored values are in the run_configuration.json file, alert the user about this discrepancy at the start of the new run and ask for explicit confirmation to continue the run. If the user confirms that the run should be continued, overwrite the stored values with the new ones.
+
+On the other hand, for the voice_ids and conversation_json_file_name parameters, for each new run these two values should be added as a new entry to a log of all voice_ids <-> conversation_json_file_name pairings that have been set across all prior runs for the analysis directory. So, for example, if a first run has voice_ids ["FCJF0", "MCPM0", "FDML0"] and conversation_json_file_name "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json", and a second run has voice_ids ["FCJF0", "MCPM0", "FDML0"] and conversation_json_file_name "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json", then after the second run there should be a record of both the (["FCJF0", "MCPM0", "FDML0"], "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json") pairing and the (["FCJF0", "MCPM0", "FDML0"], "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json") pairing. If a new run has a voice_ids and conversation_json_file_name pairing that is exactly the same as an already recorded pairing, then the user should alerted and asked for explicit confirmation to continue. If they choose to continue, the redundant second copy of the pairing should not be added again to the logged list.
+
+The second piece of functionality for the Match_Contribution_Run_Comparer module is an independent user-callable function "Compare_Match_Contribution_Runs()". The input to this function is a list of strings "comparison_run_set" corresponding to existing analysis directory folders locatable when appended to the global Analysis_Directory_Path variable. So, for example, if Analysis_Directory_Path is set to "tmp/media/layered_subdistributions/" and comparison_run_set is set to ["6000_continuous_rate_test_1o0", "6000_continuous_rate_test_2_1o0", "6000_continuous_rate_test_3_1o0"], then each of these list entries correspond to folder paths at "tmp/media/layered_subdistributions/6000_continuous_rate_test_1o0", "tmp/media/layered_subdistributions/6000_continuous_rate_test_2_1o0", and "tmp/media/layered_subdistributions/6000_continuous_rate_test_3_1o0". If any of the folders do not exist or do not have a run_configuration.json file within them, then alert the user about which folder(s) do not exist and then abort the execution.
+
+The purpose of the Compare_Match_Contribution_Runs() function is to surface any and all differences between the run configurations of the runs listed in comparison_run_set. For now, these differences should just be written out to the console. 
+
+For this console writing, first list any voice_ids <-> conversation_json_file_name pairings that are logged for at least one but less than all of the runs. For each such pairings, write out the pairing followed by " | " followed by a comma-separated list of the comparison runs for which that pairing is logged.
+
+Next, write out all entries across aggregate_match_types, cross_type_hyperparameters, chart_type_inclusions, and metric_inclusions for which the value settings are not identical across all comparison runs. The format for this should be to write out the nested dictionary path to get to each such entry, with each run value written out in a consistent order separated by " | ". The comparison runs corresponding to this order should additionally be written out at the top of this console output section. Additionally, all cross-run value sets should be written on their own dedicated line, which is indented past the deepest dictionary path listed, and has each run value vertically aligned to have the same starting line position for each entry. So, for example, a potential console-written output for this section might look like:
+
+6000_continuous_rate_test_1o0 | 6000_continuous_rate_test_2_1o0 | 6000_continuous_rate_test_3_1o0
+
+aggregate_match_types
+    deviation_scaled_percentile_proximity
+        hyperparameters
+            percentile_proximity_power_curve: 
+                2.0   | 2.0   | 1.5
+    accumulative_deviation
+        hyperparameters
+            use_non_directional_element_deviations: 
+                True  | False | False
+
+cross_type_hyperparameters
+    use_signal_rate_simulation
+                True  | False | False
+    continuous_voice_profiling
+        projected_distribution_ratio_nudge_step
+                0.01  | 0.005 | 0.002
+        voiced_timepoints_cumulation_weight_power
+                0.8   | 0.5   | 0.5
+
+chart_type_inclusions
+    per_speaker_per_bucket
+                False | False | True
+
+Let me know if anything is unclear or ambiguous, or if I am missing anything that this new module logic would need to account for. Otherwise, implement the new Match_Contribution_Run_Comparer module and then I will test it out.
+
+    
+        
 
 
