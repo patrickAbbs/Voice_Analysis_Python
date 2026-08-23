@@ -106,37 +106,67 @@ def _Extract_Medians(inverted_occurrence_ratios):
 # --- continuous voice profiling (learns bell curve projections on-the-fly instead of looking them up) ---
 
 def _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers):
+    # projected_distribution_ratio starts at an even split across buckets (1/bucket_count) rather than 0.0, and cumulative_occurrence_percentile starts at its own point's target rather than 0.0 — a neutral "no evidence yet" starting point for both versions rather than a value the very first updates would have to climb out of
+    initial_projected_distribution_ratio = 1.0 / len(voiced_frequency_bucket_centers)
     return {
         "voice_timepoints_count": 0,
         "buckets": {
             freq_center: {
-                point_name: {"projected_distribution_ratio": 0.0, "cumulative_occurrence_percentile": 0.0}
-                for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS
+                point_name: {"projected_distribution_ratio": initial_projected_distribution_ratio, "cumulative_occurrence_percentile": target_percentile}
+                for point_name, target_percentile, _ in _CONTINUOUS_VOICE_PROFILE_POINTS
             }
             for freq_center in voiced_frequency_bucket_centers
         },
     }
 
 
-def _Update_Continuous_Voice_Profile(state, voiced_frequency_bucket_centers, ratio_by_bucket, nudge_step, cumulation_weight_power):
+def _Update_Continuous_Voice_Profile(state, voiced_frequency_bucket_centers, ratio_by_bucket, version_config):
     state["voice_timepoints_count"] += 1
-    # weight_1 grows toward 1.0 as more timepoints are processed, stabilizing both estimates as the profile matures; weight_2 shrinks as 1/(n^cumulation_weight_power) instead of the plain-harmonic 1/n, so a lower power keeps weight_2 (and thus the profile's responsiveness) higher for longer
-    weight_2 = 1.0 / (state["voice_timepoints_count"] ** cumulation_weight_power)
-    weight_1 = 1.0 - weight_2
+    voice_timepoints_count = state["voice_timepoints_count"]
+
+    use_divergence_scaling_version = version_config["use_divergence_scaling_version"]
+    if use_divergence_scaling_version:
+        # cumulative_occurrence_percentile and projected_distribution_ratio each get their own independently-powered weight_2, both shrinking as 1/((n + base)^power) rather than the nudge_step_version's plain 1/(n^power) — the "+ base" keeps weight_2 from starting at exactly 1.0 on the very first timepoint
+        cumulation_weight_initialization_base = version_config["cumulation_weight_initialization_base"]
+        occurrence_percentile_weight_2 = 1.0 / ((voice_timepoints_count + cumulation_weight_initialization_base) ** version_config["occurrence_percentile_cumulation_update_power"])
+        occurrence_percentile_weight_1 = 1.0 - occurrence_percentile_weight_2
+        distribution_ratio_weight_2 = 1.0 / ((voice_timepoints_count + cumulation_weight_initialization_base) ** version_config["distribution_ratio_cumulation_update_power"])
+        distribution_ratio_weight_1 = 1.0 - distribution_ratio_weight_2
+        divergence_scaling_power = version_config["divergence_scaling_power"]
+    else:
+        # weight_1 grows toward 1.0 as more timepoints are processed, stabilizing both estimates as the profile matures; weight_2 shrinks as 1/(n^cumulation_weight_power) instead of the plain-harmonic 1/n, so a lower power keeps weight_2 (and thus the profile's responsiveness) higher for longer
+        weight_2 = 1.0 / (voice_timepoints_count ** version_config["voiced_timepoints_cumulation_weight_power"])
+        weight_1 = 1.0 - weight_2
+        nudge_step = version_config["projected_distribution_ratio_nudge_step"]
+
     for freq_center in voiced_frequency_bucket_centers:
         ratio_value = ratio_by_bucket[freq_center]
         bucket_state = state["buckets"][freq_center]
         for point_name, target_percentile, _ in _CONTINUOUS_VOICE_PROFILE_POINTS:
             point_state = bucket_state[point_name]
             below_projection = 1.0 if ratio_value < point_state["projected_distribution_ratio"] else 0.0
-            point_state["cumulative_occurrence_percentile"] = Weighted_Average(
-                point_state["cumulative_occurrence_percentile"], weight_1, below_projection, weight_2
-            )
-            # nudge the projection up if it isn't yet exceeding enough timepoints to hit its target percentile, down otherwise
-            nudged_projection = point_state["projected_distribution_ratio"] + (nudge_step if point_state["cumulative_occurrence_percentile"] < target_percentile else -nudge_step)
-            point_state["projected_distribution_ratio"] = Weighted_Average(
-                point_state["projected_distribution_ratio"], weight_1, nudged_projection, weight_2
-            )
+
+            if use_divergence_scaling_version:
+                point_state["cumulative_occurrence_percentile"] = Weighted_Average(
+                    point_state["cumulative_occurrence_percentile"], occurrence_percentile_weight_1, below_projection, occurrence_percentile_weight_2
+                )
+                # a near-zero cumulative_occurrence_percentile would make the divergence ratio blow up; floor it at a tiny epsilon (matches the codebase's existing divide-by-zero guard convention) rather than let a pathological edge case raise
+                cumulative_occurrence_percentile = max(point_state["cumulative_occurrence_percentile"], 1e-15)
+                occurrence_percentile_divergence = target_percentile / cumulative_occurrence_percentile
+                # unlike the nudge_step_version's fixed-size step, the update size here scales with how far cumulative_occurrence_percentile currently is from its target — above 1.0 (target exceeds actual) raises the projection, below 1.0 lowers it, and it shrinks toward 1.0 (no-op) as the profile converges
+                divergence_scaled_distribution_ratio_update = point_state["projected_distribution_ratio"] * (occurrence_percentile_divergence ** divergence_scaling_power)
+                point_state["projected_distribution_ratio"] = Weighted_Average(
+                    point_state["projected_distribution_ratio"], distribution_ratio_weight_1, divergence_scaled_distribution_ratio_update, distribution_ratio_weight_2
+                )
+            else:
+                point_state["cumulative_occurrence_percentile"] = Weighted_Average(
+                    point_state["cumulative_occurrence_percentile"], weight_1, below_projection, weight_2
+                )
+                # nudge the projection up if it isn't yet exceeding enough timepoints to hit its target percentile, down otherwise
+                nudged_projection = point_state["projected_distribution_ratio"] + (nudge_step if point_state["cumulative_occurrence_percentile"] < target_percentile else -nudge_step)
+                point_state["projected_distribution_ratio"] = Weighted_Average(
+                    point_state["projected_distribution_ratio"], weight_1, nudged_projection, weight_2
+                )
 
         # the three points are hunted independently with no ordering guarantee between them, which lets lower/upper cross the median and
         # produce a degenerate (non-positive) spread in _Continuous_Voice_Profile_Bell_Curve_Projections; clamp them back into a valid order
@@ -722,10 +752,38 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
     # alternative pathway: learns each voice's bell curve projections on-the-fly from its own speaking turns instead of looking them up from the persisted JSON
     continuous_voice_profiling_hyperparameters = cross_type_hyperparameters.get("continuous_voice_profiling", {})
+
+    # two mutually exclusive experimental logic paths for the projected_distribution_ratio/cumulative_occurrence_percentile update math: nudge_step_version is the original fixed-step-size logic, divergence_scaling_version scales its update size by how far cumulative_occurrence_percentile currently is from its target
+    nudge_step_version_hyperparameters = continuous_voice_profiling_hyperparameters.get("nudge_step_version", {})
+    divergence_scaling_version_hyperparameters = continuous_voice_profiling_hyperparameters.get("divergence_scaling_version", {})
+    use_nudge_step_version = nudge_step_version_hyperparameters.get("use_version", False)
+    use_divergence_scaling_version = divergence_scaling_version_hyperparameters.get("use_version", False)
+    if use_nudge_step_version and use_divergence_scaling_version:
+        raise ValueError("Element_Match_Contribution_Type_Explorer: cross_type_hyperparameters['continuous_voice_profiling']['nudge_step_version']['use_version'] and ['divergence_scaling_version']['use_version'] cannot both be True")
+
     use_continuous_voice_profiling_hyperparameter = continuous_voice_profiling_hyperparameters.get("use_continuous_voice_profiling", False)
     if use_continuous_voice_profiling_hyperparameter and not use_bell_curve:
         print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_continuous_voice_profiling'] is True but 'use_bell_curve_percentile_projection' is False; continuous voice profiling requires bell curve percentile projection and will be ignored for this run")
     use_continuous_voice_profiling = use_continuous_voice_profiling_hyperparameter and use_bell_curve
+
+    if use_continuous_voice_profiling and not (use_nudge_step_version or use_divergence_scaling_version):
+        print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_continuous_voice_profiling'] is True but neither ['nudge_step_version']['use_version'] nor ['divergence_scaling_version']['use_version'] is True; continuous voice profiling will be ignored for this run")
+        use_continuous_voice_profiling = False
+
+    if use_divergence_scaling_version:
+        continuous_voice_profile_version_config = {
+            "use_divergence_scaling_version": True,
+            "occurrence_percentile_cumulation_update_power": divergence_scaling_version_hyperparameters["occurrence_percentile_cumulation_update_power"],
+            "distribution_ratio_cumulation_update_power": divergence_scaling_version_hyperparameters["distribution_ratio_cumulation_update_power"],
+            "divergence_scaling_power": divergence_scaling_version_hyperparameters["divergence_scaling_power"],
+            "cumulation_weight_initialization_base": divergence_scaling_version_hyperparameters["cumulation_weight_initialization_base"],
+        }
+    else:
+        continuous_voice_profile_version_config = {
+            "use_divergence_scaling_version": False,
+            "projected_distribution_ratio_nudge_step": nudge_step_version_hyperparameters.get("projected_distribution_ratio_nudge_step", 1.0),
+            "voiced_timepoints_cumulation_weight_power": nudge_step_version_hyperparameters.get("voiced_timepoints_cumulation_weight_power", 1.0),
+        }
 
     use_cumulative_signal_rate_distribution_ratios_hyperparameter = continuous_voice_profiling_hyperparameters.get("use_cumulative_signal_rate_distribution_ratios", False)
     if use_cumulative_signal_rate_distribution_ratios_hyperparameter and not use_signal_rate_simulation:
@@ -734,8 +792,6 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
     continue_voice_profiles_across_conversations = continuous_voice_profiling_hyperparameters.get("continue_voice_profiles_across_conversations", False)
     voice_profile_timepoints_threshold = continuous_voice_profiling_hyperparameters.get("voice_profile_timepoints_threshold", 0)
-    projected_distribution_ratio_nudge_step = continuous_voice_profiling_hyperparameters.get("projected_distribution_ratio_nudge_step", 1.0)
-    voiced_timepoints_cumulation_weight_power = continuous_voice_profiling_hyperparameters.get("voiced_timepoints_cumulation_weight_power", 1.0)
 
     # deviation_scaled_percentile_proximity's per-bucket calculation needs the bell curve's lower/upper standard deviation, so unlike every other variant its inclusion also depends on use_bell_curve_percentile_projection
     deviation_scaled_percentile_proximity_requested = aggregate_match_types.get("deviation_scaled_percentile_proximity", {}).get("include_variant", False)
@@ -946,7 +1002,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                         own_turn_ratio_by_bucket[freq_center] = distribution_ratio_signal_rates[freq_center] / total_distribution_signal_rate
                                     else:
                                         own_turn_ratio_by_bucket[freq_center] = float(distribution[freq_index][timepoint_index])
-                                _Update_Continuous_Voice_Profile(continuous_voice_profile_state, voiced_frequency_bucket_centers, own_turn_ratio_by_bucket, projected_distribution_ratio_nudge_step, voiced_timepoints_cumulation_weight_power)
+                                _Update_Continuous_Voice_Profile(continuous_voice_profile_state, voiced_frequency_bucket_centers, own_turn_ratio_by_bucket, continuous_voice_profile_version_config)
 
                             is_voice_profile_ready = continuous_voice_profile_state["voice_timepoints_count"] > voice_profile_timepoints_threshold
 

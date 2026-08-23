@@ -914,6 +914,31 @@ chart_type_inclusions
 Let me know if anything is unclear or ambiguous, or if I am missing anything that this new module logic would need to account for. Otherwise, implement the new Match_Contribution_Run_Comparer module and then I will test it out.
 
     
-        
+-------------------------------------------------------------------------------------------------------
+
+
+Next, I want you to add an optional alternative version of the continuous_voice_profiling functionality in the Element_Match_Contribution_Type_Explorer module. The goal of this is to be able to test out a fairly meaningfully altered new experimental version of continuous_voice_profiling logic without deprecating the current version, so that it is straightforward to switch back and forth between the two in different scenario runs to compare them. The new version can share code with the current version in places where their logic overlaps.
+
+To that end, the structure of the continuous_voice_profiling sub-dictionary within cross_type_hyperparameters should be modified to accommodate the two alternative versions. The use_continuous_voice_profiling, continue_voice_profiles_across_conversations, use_cumulative_signal_rate_distribution_ratios, and voice_profile_timepoints_threshold hyperparameters can remain as they currently are, since functionalities they control should be identical / shared across both versions. However, two new sub-dictionaries should be added to the continuous_voice_profiling sub-dictionary under keys "nudge_step_version" and "divergence_scaling_version". 
+
+The nudge_step_version corresponds to the currently implemented logic, so the current projected_distribution_ratio_nudge_step and voiced_timepoints_cumulation_weight_power hyperparameters should both be moved to this sub-dictionary. Additionally, a Boolean hyperparameter "use_version" should be added to the nudge_step_version sub-dictionary. When this is True and use_continuous_voice_profiling in the parent sub-dictionary is True, nudge_step_version logic (meaning the currently implemented logic) should be used. 
+
+The divergence_scaling_version sub-dictionary contains hyperparameters for the new alternative logic version. Like the nudge_step_version, it should have a Boolean "use_version" hyperparameter that controls whether the logic path is used. If use_version is True for both sub-dictionaries, an error should be raised to the user and the run should be terminated. Additionally, the nudge_step_version sub-dictionary should contain three float-valued hyperparameters "occurrence_percentile_cumulation_update_power", "distribution_ratio_cumulation_update_power", and "divergence_scaling_power", and an integer hyperparameter "cumulation_weight_initialization_base". I will describe the functions of each of these shortly.
+
+The main difference between the two versions is in the logic for updating cumulative_occurrence_percentile and projected_distribution_ratio for each frequency bucket. I will now describe how the logic for the new divergence_scaling_version differs from that of the nudge_step_version:
+    1) cumulative_occurrence_percentile is updated via the same Weighted_Average() logic as for the nudge_step_version, except that weight_2 is calculated as 1.0 / ((state["voiced_timepoints_count"] + cumulation_weight_initialization_base) ** occurrence_percentile_cumulation_update_power) instead of 1.0 / (state["voice_timepoints_count"] ** cumulation_weight_power)
+    2) projected_distribution_ratio is updated via Weighted_Average(), but with more substantial differences in its weight and update calculations. I will therefore describe each Weighted_Average() input value calculation individually:
+        1) weight_1 is 1.0 - weight_2 (note: weight_2 and by extension weight_1 are projected_distribution_ratio-specific rather than shared with cumulative_occurrence_percentile)
+        2) weight_2 is 1.0 / ((state["voiced_timepoints_count"] + cumulation_weight_initialization_base) ** distribution_ratio_cumulation_update_power)
+        3) value_1 is current projected_distribution_ratio
+        4) value_2 is calculated via the following steps:
+            1) occurrence_percentile_divergence = target_percentile / cumulative_occurrence_percentile 
+            2) divergence_scaled_distribution_ratio_update = ([current projected_distribution_ratio] * (occurrence_percentile_divergence ** divergence_scaling_power))
+
+And as an additional change that should be applied to both logic versions, projected_distribution_ratio should be first initialized to 1.0 / [number of frequency buckets], and cumulative_occurrence_percentile should be first initialized to target percentile.
+
+For some context, the thinking behind the new divergence_scaling_version logic is to account for how far cumulative_occurrence_percentile is from target_percentile in determining how big a value change to apply to projected_distribution_ratio, rather than purely determining projected_distribution_ratio change amount based on number of timepoints processed and a binary measurement of whether cumulative_occurrence_percentile is higher or lower than target_percentile. The hope is that this would allow projected_distribution_ratio to scale down its changes as cumulative_occurrence_percentile approaches its target to improve convergence stability, but I want to compare it in practice to the other approach before determining which functions better in practice.
+
+Let me know if anything is unclear or ambiguous, or if I am missing anything that this new module logic would need to account for. Otherwise, implement the new divergence-scaling version of continuous voice profiling and then I will test it out.
 
 

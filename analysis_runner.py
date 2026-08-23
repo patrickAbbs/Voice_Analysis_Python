@@ -50,7 +50,8 @@ Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0
 #Conversational_Speaker_Audio_Set_File_Name = "FDML0_0o4_MEDR0_0o3_MGRL0_0o2_MDAC0_0o1_50o0.json"
 
 #Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0", "UNIVERSAL"]
-Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0", "UNIVERSAL"]
+#Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0", "UNIVERSAL"]
+Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0"]
 #Conversational_Tracked_Voice_List = ["FDML0", "MEDR0", "MGRL0", "MDAC0"]
 
 New_Partial_Speaker_Audio_Set = {
@@ -157,14 +158,24 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "include_non_voiced_timepoints": True,
             "use_bell_curve_percentile_projection": True,
             "occurrence_ratio_cumulation_half_life": 1.0,
-            "voice_profile_cumulation_half_life": None,
+            "voice_profile_cumulation_half_life": 1.0,
             "continuous_voice_profiling":{
                 "use_continuous_voice_profiling": True,
                 "continue_voice_profiles_across_conversations": True,
                 "use_cumulative_signal_rate_distribution_ratios": True,
                 "voice_profile_timepoints_threshold": 50,
-                "projected_distribution_ratio_nudge_step": 0.002,
-                "voiced_timepoints_cumulation_weight_power": 0.5
+                "nudge_step_version":{
+                    "use_version": False,
+                    "projected_distribution_ratio_nudge_step": 0.002,
+                    "voiced_timepoints_cumulation_weight_power": 0.5
+                },
+                "divergence_scaling_version":{
+                    "use_version": True,
+                    "cumulation_weight_initialization_base": 50.0,
+                    "occurrence_percentile_cumulation_update_power": 0.5,
+                    "distribution_ratio_cumulation_update_power": 0.5,
+                    "divergence_scaling_power": 0.15
+                }
             }
         },
         chart_type_inclusions={
@@ -200,9 +211,9 @@ def Run_Match_Contribution_Run_Comparison():
 #Run_Subdstributions()
 #Run_Subtractive_Subdstributions()
 #Run_Voice_Subdistribution_Deviation_Analysis()
-#Run_Element_Match_Contribution_Type_Analysis()
+Run_Element_Match_Contribution_Type_Analysis()
 
-Run_Match_Contribution_Run_Comparison()
+#Run_Match_Contribution_Run_Comparison()
 
 #Run_Visualize_Occurrence_Ratio_Percentile_Shapes()
 
