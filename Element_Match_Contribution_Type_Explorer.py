@@ -105,24 +105,57 @@ def _Extract_Medians(inverted_occurrence_ratios):
 
 # --- continuous voice profiling (learns bell curve projections on-the-fly instead of looking them up) ---
 
-def _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers):
+def _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers, version_config):
+    state = {"voice_timepoints_count": 0}
+
+    if version_config["use_perfect_tracking_version"]:
+        # this version keeps the raw observations themselves rather than an iteratively-refined estimate of them, so it needs none of the per-point projection state the other two versions carry
+        state["bucket_ratio_records"] = {freq_center: [] for freq_center in voiced_frequency_bucket_centers}
+        return state
+
     # projected_distribution_ratio starts at an even split across buckets (1/bucket_count) rather than 0.0, and cumulative_occurrence_percentile starts at its own point's target rather than 0.0 — a neutral "no evidence yet" starting point for both versions rather than a value the very first updates would have to climb out of
     initial_projected_distribution_ratio = 1.0 / len(voiced_frequency_bucket_centers)
-    return {
-        "voice_timepoints_count": 0,
-        "buckets": {
-            freq_center: {
-                point_name: {"projected_distribution_ratio": initial_projected_distribution_ratio, "cumulative_occurrence_percentile": target_percentile}
-                for point_name, target_percentile, _ in _CONTINUOUS_VOICE_PROFILE_POINTS
-            }
-            for freq_center in voiced_frequency_bucket_centers
-        },
+    state["buckets"] = {
+        freq_center: {
+            point_name: {"projected_distribution_ratio": initial_projected_distribution_ratio, "cumulative_occurrence_percentile": target_percentile}
+            for point_name, target_percentile, _ in _CONTINUOUS_VOICE_PROFILE_POINTS
+        }
+        for freq_center in voiced_frequency_bucket_centers
     }
+    return state
+
+
+def _Perfect_Tracking_Ratio_At_Percentile(sorted_bucket_ratios, target_percentile):
+    # the record holds every ratio this voice has produced for this bucket in ascending order, so the ratio sitting at a target percentile is just the value at that rank — the same "observed ratio whose occurrence percentile is closest to the target" choice _Extract_Bell_Curve_Projections makes against a persisted JSON, resolved directly instead of by search
+    record_length = len(sorted_bucket_ratios)
+    if record_length == 0:
+        return 0.0
+    rank_index = min(record_length - 1, max(0, round(target_percentile * record_length)))
+    return sorted_bucket_ratios[rank_index]
+
+
+def _Continuous_Voice_Profile_Point_Ratios(state, freq_center, use_perfect_tracking_version):
+    # the single place the three bell curve points' distribution ratios are read out of profile state, whichever version produced it — so projections and convergence values can never disagree about what the profile currently says
+    if use_perfect_tracking_version:
+        sorted_bucket_ratios = state["bucket_ratio_records"][freq_center]
+        return {
+            point_name: _Perfect_Tracking_Ratio_At_Percentile(sorted_bucket_ratios, target_percentile)
+            for point_name, target_percentile, _ in _CONTINUOUS_VOICE_PROFILE_POINTS
+        }
+    bucket_state = state["buckets"][freq_center]
+    return {point_name: bucket_state[point_name]["projected_distribution_ratio"] for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
 
 
 def _Update_Continuous_Voice_Profile(state, voiced_frequency_bucket_centers, ratio_by_bucket, version_config):
     state["voice_timepoints_count"] += 1
     voice_timepoints_count = state["voice_timepoints_count"]
+
+    if version_config["use_perfect_tracking_version"]:
+        # mirrors Run_Layered_Occurrence_Count_Population's "keep a complete record of every timepoint's distribution ratio" accumulation, except built incrementally as the sequence is scored rather than in a separate pass beforehand — an insertion-sorted list rather than that function's cumulative-occurrence-count dict, since the dict's "increment every key at or below this ratio" step is O(existing keys) per bucket per timepoint and would make a per-timepoint (rather than once-per-corpus) rebuild quadratic
+        bucket_ratio_records = state["bucket_ratio_records"]
+        for freq_center in voiced_frequency_bucket_centers:
+            bisect.insort(bucket_ratio_records[freq_center], ratio_by_bucket[freq_center])
+        return
 
     use_divergence_scaling_version = version_config["use_divergence_scaling_version"]
     if use_divergence_scaling_version:
@@ -183,26 +216,26 @@ def _Update_Continuous_Voice_Profile(state, voiced_frequency_bucket_centers, rat
             upper_point_state["projected_distribution_ratio"] = median_value
 
 
-def _Continuous_Voice_Profile_Bell_Curve_Projections(state, voiced_frequency_bucket_centers):
+def _Continuous_Voice_Profile_Bell_Curve_Projections(state, voiced_frequency_bucket_centers, use_perfect_tracking_version):
     # mirrors _Extract_Bell_Curve_Projections's (center, lower_standard_deviation, upper_standard_deviation) shape so it can drop straight into _Bell_Curve_Value_2
     projections = []
     for freq_center in voiced_frequency_bucket_centers:
-        bucket_state = state["buckets"][freq_center]
-        median_ratio = bucket_state["median"]["projected_distribution_ratio"]
-        lower_ratio = bucket_state["lower_standard_deviation"]["projected_distribution_ratio"]
-        upper_ratio = bucket_state["upper_standard_deviation"]["projected_distribution_ratio"]
+        point_ratios = _Continuous_Voice_Profile_Point_Ratios(state, freq_center, use_perfect_tracking_version)
+        median_ratio = point_ratios["median"]
+        lower_ratio = point_ratios["lower_standard_deviation"]
+        upper_ratio = point_ratios["upper_standard_deviation"]
         projections.append((median_ratio, median_ratio - lower_ratio, upper_ratio - median_ratio))
     return projections
 
 
-def _Continuous_Voice_Profile_Convergence_Values(state, voiced_frequency_bucket_centers, static_bell_curve_projections):
+def _Continuous_Voice_Profile_Convergence_Values(state, voiced_frequency_bucket_centers, static_bell_curve_projections, use_perfect_tracking_version):
     sums = {point_name: 0.0 for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
     for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
         static_center, static_lower_standard_deviation, static_upper_standard_deviation = static_bell_curve_projections[freq_index]
-        bucket_state = state["buckets"][freq_center]
-        live_median = bucket_state["median"]["projected_distribution_ratio"]
-        live_lower_standard_deviation = live_median - bucket_state["lower_standard_deviation"]["projected_distribution_ratio"]
-        live_upper_standard_deviation = bucket_state["upper_standard_deviation"]["projected_distribution_ratio"] - live_median
+        point_ratios = _Continuous_Voice_Profile_Point_Ratios(state, freq_center, use_perfect_tracking_version)
+        live_median = point_ratios["median"]
+        live_lower_standard_deviation = live_median - point_ratios["lower_standard_deviation"]
+        live_upper_standard_deviation = point_ratios["upper_standard_deviation"] - live_median
         sums["median"] += -abs(live_median - static_center)
         sums["lower_standard_deviation"] += -abs(live_lower_standard_deviation - static_lower_standard_deviation)
         sums["upper_standard_deviation"] += -abs(live_upper_standard_deviation - static_upper_standard_deviation)
@@ -753,25 +786,40 @@ def Run_Element_Match_Contribution_Type_Exploration(
     # alternative pathway: learns each voice's bell curve projections on-the-fly from its own speaking turns instead of looking them up from the persisted JSON
     continuous_voice_profiling_hyperparameters = cross_type_hyperparameters.get("continuous_voice_profiling", {})
 
-    # two mutually exclusive experimental logic paths for the projected_distribution_ratio/cumulative_occurrence_percentile update math: nudge_step_version is the original fixed-step-size logic, divergence_scaling_version scales its update size by how far cumulative_occurrence_percentile currently is from its target
+    # three mutually exclusive logic paths for how a voice's bell curve points are learned: nudge_step_version is the original fixed-step-size logic, divergence_scaling_version scales its update size by how far cumulative_occurrence_percentile currently is from its target, and perfect_tracking_version keeps every observed ratio and reads the exact ratio at each target percentile straight out of that record (an idealized "best possible given the timepoints seen so far" baseline to compare the other two against)
     nudge_step_version_hyperparameters = continuous_voice_profiling_hyperparameters.get("nudge_step_version", {})
     divergence_scaling_version_hyperparameters = continuous_voice_profiling_hyperparameters.get("divergence_scaling_version", {})
+    perfect_tracking_version_hyperparameters = continuous_voice_profiling_hyperparameters.get("perfect_tracking_version", {})
     use_nudge_step_version = nudge_step_version_hyperparameters.get("use_version", False)
     use_divergence_scaling_version = divergence_scaling_version_hyperparameters.get("use_version", False)
-    if use_nudge_step_version and use_divergence_scaling_version:
-        raise ValueError("Element_Match_Contribution_Type_Explorer: cross_type_hyperparameters['continuous_voice_profiling']['nudge_step_version']['use_version'] and ['divergence_scaling_version']['use_version'] cannot both be True")
+    use_perfect_tracking_version = perfect_tracking_version_hyperparameters.get("use_version", False)
+    selected_continuous_voice_profile_versions = [
+        version_name for version_name, version_is_selected in (
+            ("nudge_step_version", use_nudge_step_version),
+            ("divergence_scaling_version", use_divergence_scaling_version),
+            ("perfect_tracking_version", use_perfect_tracking_version),
+        ) if version_is_selected
+    ]
+    if len(selected_continuous_voice_profile_versions) > 1:
+        raise ValueError(f"Element_Match_Contribution_Type_Explorer: only one cross_type_hyperparameters['continuous_voice_profiling'] version may have 'use_version' set to True, but {len(selected_continuous_voice_profile_versions)} do: {', '.join(selected_continuous_voice_profile_versions)}")
 
     use_continuous_voice_profiling_hyperparameter = continuous_voice_profiling_hyperparameters.get("use_continuous_voice_profiling", False)
     if use_continuous_voice_profiling_hyperparameter and not use_bell_curve:
         print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_continuous_voice_profiling'] is True but 'use_bell_curve_percentile_projection' is False; continuous voice profiling requires bell curve percentile projection and will be ignored for this run")
     use_continuous_voice_profiling = use_continuous_voice_profiling_hyperparameter and use_bell_curve
 
-    if use_continuous_voice_profiling and not (use_nudge_step_version or use_divergence_scaling_version):
-        print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_continuous_voice_profiling'] is True but neither ['nudge_step_version']['use_version'] nor ['divergence_scaling_version']['use_version'] is True; continuous voice profiling will be ignored for this run")
+    if use_continuous_voice_profiling and not selected_continuous_voice_profile_versions:
+        print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_continuous_voice_profiling'] is True but no version's 'use_version' is True (['nudge_step_version'], ['divergence_scaling_version'], ['perfect_tracking_version']); continuous voice profiling will be ignored for this run")
         use_continuous_voice_profiling = False
 
-    if use_divergence_scaling_version:
+    if use_perfect_tracking_version:
         continuous_voice_profile_version_config = {
+            "use_perfect_tracking_version": True,
+            "use_divergence_scaling_version": False,
+        }
+    elif use_divergence_scaling_version:
+        continuous_voice_profile_version_config = {
+            "use_perfect_tracking_version": False,
             "use_divergence_scaling_version": True,
             "occurrence_percentile_cumulation_update_power": divergence_scaling_version_hyperparameters["occurrence_percentile_cumulation_update_power"],
             "distribution_ratio_cumulation_update_power": divergence_scaling_version_hyperparameters["distribution_ratio_cumulation_update_power"],
@@ -780,6 +828,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
         }
     else:
         continuous_voice_profile_version_config = {
+            "use_perfect_tracking_version": False,
             "use_divergence_scaling_version": False,
             "projected_distribution_ratio_nudge_step": nudge_step_version_hyperparameters.get("projected_distribution_ratio_nudge_step", 1.0),
             "voiced_timepoints_cumulation_weight_power": nudge_step_version_hyperparameters.get("voiced_timepoints_cumulation_weight_power", 1.0),
@@ -889,7 +938,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
         all_results = {}
 
         # if continuity across conversations is on, this voice's profile is created once here and mutated in place across every sequence below; otherwise it's recreated per-sequence further down
-        continuous_voice_profile_state = _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers) if (use_continuous_voice_profiling and continue_voice_profiles_across_conversations) else None
+        continuous_voice_profile_state = _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers, continuous_voice_profile_version_config) if (use_continuous_voice_profiling and continue_voice_profiles_across_conversations) else None
 
         for sequence_index, sub_sequences in enumerate(comparative_voices_audio_set):
             cumulative_comparative_occurrence_ratios = {freq: [0.5] for freq in voiced_frequency_bucket_centers} if need_cumulative_comparative_occurrence_ratios else {}
@@ -898,7 +947,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
             distribution_ratio_signal_rates = {freq: 0.0 for freq in voiced_frequency_bucket_centers}
 
             if use_continuous_voice_profiling and not continue_voice_profiles_across_conversations:
-                continuous_voice_profile_state = _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers)
+                continuous_voice_profile_state = _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers, continuous_voice_profile_version_config)
 
             match_contribution_weights = {freq: [0.0] for freq in voiced_frequency_bucket_centers} if include_weighted_binary_match_contribution else {}
             weighted_binary_match_contributions = [-0.5] if include_weighted_binary_match_contribution else []
@@ -1008,7 +1057,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
                             if include_continuous_voice_profile_convergence_chart:
                                 if is_voice_profile_ready:
-                                    convergence_values = _Continuous_Voice_Profile_Convergence_Values(continuous_voice_profile_state, voiced_frequency_bucket_centers, bell_curve_projections)
+                                    convergence_values = _Continuous_Voice_Profile_Convergence_Values(continuous_voice_profile_state, voiced_frequency_bucket_centers, bell_curve_projections, use_perfect_tracking_version)
                                 else:
                                     convergence_values = {point_name: math.nan for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
                                 for point_name, value in convergence_values.items():
@@ -1020,7 +1069,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                 processed_timepoint_count += 1
                                 continue
 
-                            active_bell_curve_projections = _Continuous_Voice_Profile_Bell_Curve_Projections(continuous_voice_profile_state, voiced_frequency_bucket_centers)
+                            active_bell_curve_projections = _Continuous_Voice_Profile_Bell_Curve_Projections(continuous_voice_profile_state, voiced_frequency_bucket_centers, use_perfect_tracking_version)
                             active_bucket_medians = [projection[0] for projection in active_bell_curve_projections] if need_bucket_medians else bucket_medians
                         else:
                             active_bell_curve_projections = bell_curve_projections

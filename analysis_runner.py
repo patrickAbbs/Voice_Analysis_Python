@@ -172,9 +172,12 @@ def Run_Element_Match_Contribution_Type_Analysis():
                 "divergence_scaling_version":{
                     "use_version": True,
                     "cumulation_weight_initialization_base": 50.0,
-                    "occurrence_percentile_cumulation_update_power": 0.5,
-                    "distribution_ratio_cumulation_update_power": 0.5,
-                    "divergence_scaling_power": 0.15
+                    "occurrence_percentile_cumulation_update_power": 0.8,
+                    "distribution_ratio_cumulation_update_power": 0.8,
+                    "divergence_scaling_power": 0.5
+                },
+                "perfect_tracking_version":{
+                    "use_version": False
                 }
             }
         },
