@@ -18,13 +18,14 @@ Loads `.wav` files from `Audio_Directory` and produces a STFT spectrogram per fi
 ### 2. `Frequency_Distribution_Generator.py`
 Translates each spectrogram into bucketed frequency progressions, then normalizes to distributions.
 - Buckets are defined by `Frequency_Distribution_Bucket_Increment` (center step) and `Frequency_Distribution_Bucket_Range` (window around each center). Uses a windowed-average approach — each bucket value is the average of all spectrogram frequency bins within that window.
-- Normalization: each timepoint's bucket values are divided by the sum across all buckets, giving a ratio (share of total energy) per frequency per timepoint.
+- Normalization: each timepoint's bucket values are divided by the sum across all buckets, giving a ratio (share of total energy) per frequency per timepoint. The denominator spans the full `Frequency_Distribution_Frequency_Maximum` range (10000 Hz), **not** the narrower `Subdistribution_Voiced_Frequency_Limit` (6000 Hz) range that everything downstream actually processes.
+- **Why the retained ratios do not sum to 1.0** (deliberate, not a bug — and the single most common source of confusion when reading this data): frequencies below `Subdistribution_Voiced_Frequency_Limit` are far more indicative of voice characteristics than those above it, so only those buckets flow downstream. But normalizing over just that narrower range would distort every ratio, since each bucket's share would then be relative to an incomplete picture of the frequencies it is competing against. The compromise is to normalize over the full 0–10000 Hz range while excluding the buckets above 6000 Hz from processing. The consequence is that the retained buckets sum to the *voiced share of total energy* rather than to 1.0 — in practice roughly 0.65–0.95 per timepoint. That per-timepoint sum is exactly the quantity `Subdistribution_Timepoint_Voiced_Ratio_Minimum` thresholds against (see step 3), so by construction no retained timepoint sums below it. Anything reasoning about a bucket's "expected" share (e.g. a `1.0 / bucket_count` baseline) must account for this: the mean retained bucket value is `(voiced share) / bucket_count`, noticeably below `1.0 / bucket_count`.
 - Distribution types stored: `linear`, `logarithmic`, `decibel`. Only types in `Distribution_Types` are passed downstream.
 - Output: one combined PNG showing the bucketed frequency distribution over time per audio file.
 
 ### 3. `Subdistribution_Extractor.py`
 For each frequency bucket, determines the highest amplitude ratio that occurs at least X% of voiced timepoints — producing one "subdistribution" per threshold tier.
-- A timepoint is counted as voiced only if the sum of distribution ratios within `Subdistribution_Voiced_Frequency_Limit` meets `Subdistribution_Timepoint_Voiced_Ratio_Minimum`.
+- A timepoint is counted as voiced only if the sum of distribution ratios within `Subdistribution_Voiced_Frequency_Limit` meets `Subdistribution_Timepoint_Voiced_Ratio_Minimum`. That sum is the voiced share of total energy described in step 2 (it is below 1.0 by design), so this threshold is effectively "how much of this timepoint's energy sits in the voice-characteristic range".
 - Thresholds are defined in `Subdistribution_Thresholds` (e.g. `[0.9, 0.8, 0.7, 0.6, 0.5]`).
 - Output charts: one "self" chart per audio file (all threshold tiers stacked) and one "cross" chart per threshold tier (all audio files side by side).
 
@@ -321,10 +322,11 @@ All pipeline state lives in `Audio_Analysis_Data` (defined in `analysis_runner.p
 | `Analysis_Run_Name` | `subdistributions_test` | prefix for output filenames |
 | `Spectrogram_Window_Size_In_Seconds` | `0.05` | 50ms; speech standard is ~25ms |
 | `Spectrogram_Window_Jump_In_Seconds` | `0.01` | 10ms hop |
-| `Spectrogram_Displayed_Frequency_Maximum` | `4000` | Hz cap for spectrogram chart |
+| `Spectrogram_Displayed_Frequency_Maximum` | `6000` | Hz cap for spectrogram chart |
 | `Frequency_Distribution_Bucket_Range` | `250.0` | Hz window per bucket |
 | `Frequency_Distribution_Bucket_Increment` | `25.0` | Hz step between bucket centers |
-| `Subdistribution_Voiced_Frequency_Limit` | `4000` | Hz; only buckets below this are used |
+| `Frequency_Distribution_Frequency_Maximum` | `10000` | Hz; upper bound of the bucket set the distribution ratios are normalized over — deliberately wider than `Subdistribution_Voiced_Frequency_Limit` (see step 2) |
+| `Subdistribution_Voiced_Frequency_Limit` | `6000` | Hz; only buckets below this are used downstream (they carry the voice-characteristic information), but ratios are still normalized over the full `Frequency_Distribution_Frequency_Maximum` range — see step 2 for why |
 | `Subdistribution_Timepoint_Voiced_Ratio_Minimum` | `0.5` | min voiced-range ratio to count a timepoint |
 | `Subdistribution_Thresholds` | `[0.9, 0.8, 0.7, 0.6, 0.5]` | occurrence ratio tiers |
 | `Distribution_Types` | `["logarithmic"]` | which type(s) flow into subdistribution step |
