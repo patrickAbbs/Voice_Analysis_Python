@@ -46,6 +46,26 @@ _CONTINUOUS_VOICE_PROFILE_POINTS = [
     ("upper_standard_deviation", 0.84135, "--"),
 ]
 
+
+def _Standard_Normal_Probability_Density(standard_deviations_from_mean):
+    # the standard normal PDF, computed directly rather than pulled from scipy so this module keeps its existing dependency set
+    return math.exp(-0.5 * standard_deviations_from_mean * standard_deviations_from_mean) / math.sqrt(2.0 * math.pi)
+
+
+# local_density_version scales each point's step by the local probability density at that point of a normal curve: the step needed to shift a quantile by a given amount is inversely proportional to how densely observations are packed there, and density is lower at +/-1 standard deviation than at the median
+_BELL_CURVE_DENSITY_AT_ZERO_STANDARD_DEVIATIONS = _Standard_Normal_Probability_Density(0.0)
+_BELL_CURVE_DENSITY_AT_ONE_STANDARD_DEVIATION = _Standard_Normal_Probability_Density(1.0)
+_LOCAL_DENSITY_POINT_DENSITIES = {
+    "lower_standard_deviation": _BELL_CURVE_DENSITY_AT_ONE_STANDARD_DEVIATION,
+    "median": _BELL_CURVE_DENSITY_AT_ZERO_STANDARD_DEVIATIONS,
+    "upper_standard_deviation": _BELL_CURVE_DENSITY_AT_ONE_STANDARD_DEVIATION,
+}
+
+# a purely defensive floor (not a tuning knob): if lower/upper ever reached the median the spread would be 0, zeroing that point's local density multiplier and freezing it permanently
+_LOCAL_DENSITY_MINIMUM_LOG_SPREAD = 1e-6
+# log(0) is -inf and log(negative) raises; distribution ratios are positive in practice, so this only guards a degenerate observation
+_LOCAL_DENSITY_MINIMUM_RATIO = 1e-12
+
 METRIC_ORDER = [
     "match_ratio",
     "transition_duration",
@@ -123,8 +143,30 @@ def _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers, versio
         state["bucket_ratio_records"] = {freq_center: [] for freq_center in voiced_frequency_bucket_centers}
         return state
 
+    even_split_distribution_ratio = 1.0 / len(voiced_frequency_bucket_centers)
+
+    if version_config["use_local_density_version"]:
+        # this version works entirely in log space, so the three points start at the log of an even split, spread apart by starting_standard_deviations_multiplier (< 1.0, so it shrinks the lower point and its reciprocal grows the upper one) to give a non-degenerate initial spread for the density scaling to work from
+        starting_standard_deviations_multiplier = version_config["starting_standard_deviations_multiplier"]
+        initial_log_ratios = {
+            "median": math.log(even_split_distribution_ratio),
+            "lower_standard_deviation": math.log(even_split_distribution_ratio * starting_standard_deviations_multiplier),
+            "upper_standard_deviation": math.log(even_split_distribution_ratio * (1.0 / starting_standard_deviations_multiplier)),
+        }
+        state["buckets"] = {
+            freq_center: {
+                point_name: {"log_projected_distribution_ratio": initial_log_ratios[point_name]}
+                for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS
+            }
+            for freq_center in voiced_frequency_bucket_centers
+        }
+        # a starting_standard_deviations_multiplier >= 1.0 would invert the ordering, so normalize it up front rather than letting the first update work from an invalid spread
+        for bucket_state in state["buckets"].values():
+            _Clamp_Local_Density_Point_Ordering(bucket_state)
+        return state
+
     # projected_distribution_ratio starts at an even split across buckets (1/bucket_count) rather than 0.0, and cumulative_occurrence_percentile starts at its own point's target rather than 0.0 — a neutral "no evidence yet" starting point for both versions rather than a value the very first updates would have to climb out of
-    initial_projected_distribution_ratio = 1.0 / len(voiced_frequency_bucket_centers)
+    initial_projected_distribution_ratio = even_split_distribution_ratio
     state["buckets"] = {
         freq_center: {
             point_name: {"projected_distribution_ratio": initial_projected_distribution_ratio, "cumulative_occurrence_percentile": target_percentile}
@@ -133,6 +175,30 @@ def _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers, versio
         for freq_center in voiced_frequency_bucket_centers
     }
     return state
+
+
+def _Clamp_Local_Density_Point_Ordering(bucket_state):
+    # the three points step independently with no ordering guarantee; force lower strictly below and upper strictly above the median so neither spread can collapse to 0 and freeze that point's density multiplier
+    median_log_ratio = bucket_state["median"]["log_projected_distribution_ratio"]
+    lower_point_state = bucket_state["lower_standard_deviation"]
+    if lower_point_state["log_projected_distribution_ratio"] > median_log_ratio - _LOCAL_DENSITY_MINIMUM_LOG_SPREAD:
+        lower_point_state["log_projected_distribution_ratio"] = median_log_ratio - _LOCAL_DENSITY_MINIMUM_LOG_SPREAD
+    upper_point_state = bucket_state["upper_standard_deviation"]
+    if upper_point_state["log_projected_distribution_ratio"] < median_log_ratio + _LOCAL_DENSITY_MINIMUM_LOG_SPREAD:
+        upper_point_state["log_projected_distribution_ratio"] = median_log_ratio + _LOCAL_DENSITY_MINIMUM_LOG_SPREAD
+
+
+def _Local_Density_Point_Spreads(bucket_state):
+    """Per-point log-space spread standing in for the local standard deviation at that point."""
+    median_log_ratio = bucket_state["median"]["log_projected_distribution_ratio"]
+    lower_spread = median_log_ratio - bucket_state["lower_standard_deviation"]["log_projected_distribution_ratio"]
+    upper_spread = bucket_state["upper_standard_deviation"]["log_projected_distribution_ratio"] - median_log_ratio
+    return {
+        "lower_standard_deviation": lower_spread,
+        # the median's own spread is the harmonic mean of the two half-spreads, so a lopsided distribution is represented by whichever side is tighter rather than by their midpoint
+        "median": (2.0 * lower_spread * upper_spread) / (lower_spread + upper_spread),
+        "upper_standard_deviation": upper_spread,
+    }
 
 
 def _Perfect_Tracking_Ratio_At_Percentile(sorted_bucket_ratios, target_percentile):
@@ -144,15 +210,18 @@ def _Perfect_Tracking_Ratio_At_Percentile(sorted_bucket_ratios, target_percentil
     return sorted_bucket_ratios[rank_index]
 
 
-def _Continuous_Voice_Profile_Point_Ratios(state, freq_center, use_perfect_tracking_version):
+def _Continuous_Voice_Profile_Point_Ratios(state, freq_center, version_config):
     # the single place the three bell curve points' distribution ratios are read out of profile state, whichever version produced it — so projections and convergence values can never disagree about what the profile currently says
-    if use_perfect_tracking_version:
+    if version_config["use_perfect_tracking_version"]:
         sorted_bucket_ratios = state["bucket_ratio_records"][freq_center]
         return {
             point_name: _Perfect_Tracking_Ratio_At_Percentile(sorted_bucket_ratios, target_percentile)
             for point_name, target_percentile, _ in _CONTINUOUS_VOICE_PROFILE_POINTS
         }
     bucket_state = state["buckets"][freq_center]
+    if version_config["use_local_density_version"]:
+        # local_density_version tracks everything in log space, so undo the log here — every downstream consumer (bell curve projections, convergence values, accumulative_deviation's bucket medians) sees ordinary distribution ratios and needs no awareness of this version
+        return {point_name: math.exp(bucket_state[point_name]["log_projected_distribution_ratio"]) for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
     return {point_name: bucket_state[point_name]["projected_distribution_ratio"] for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
 
 
@@ -165,6 +234,28 @@ def _Update_Continuous_Voice_Profile(state, voiced_frequency_bucket_centers, rat
         bucket_ratio_records = state["bucket_ratio_records"]
         for freq_center in voiced_frequency_bucket_centers:
             bisect.insort(bucket_ratio_records[freq_center], ratio_by_bucket[freq_center])
+        return
+
+    if version_config["use_local_density_version"]:
+        # a weighted-increment quantile hunt in log space: each point steps by +target_quantile when the observation lands above it and -(1 - target_quantile) when below, so its expected step is zero exactly at its target quantile. The step is then scaled by (a) how far along this voice's profile is, and (b) the local spread at that point, so a point sitting where observations are sparse takes proportionally larger steps.
+        scaling_duration_maximum_timepoints = version_config["scaling_duration_maximum_timepoints"]
+        elapsed_timepoints = voice_timepoints_count + version_config["duration_scaling_multiplier_initialization_base"]
+        # steps shrink as 1/n as the profile matures, but the cap keeps them from shrinking indefinitely so a profile can still track a voice that genuinely changes later
+        voice_profile_duration_scaling_multiplier = 1.0 / min(elapsed_timepoints, scaling_duration_maximum_timepoints)
+
+        for freq_center in voiced_frequency_bucket_centers:
+            bucket_state = state["buckets"][freq_center]
+            observed_log_ratio = math.log(max(ratio_by_bucket[freq_center], _LOCAL_DENSITY_MINIMUM_RATIO))
+            # every point's step is sized from the same pre-update spreads, so the three updates within a timepoint don't depend on the order they're applied in
+            point_spreads = _Local_Density_Point_Spreads(bucket_state)
+
+            for point_name, target_quantile, _ in _CONTINUOUS_VOICE_PROFILE_POINTS:
+                point_state = bucket_state[point_name]
+                local_density_scaling_multiplier = point_spreads[point_name] / _LOCAL_DENSITY_POINT_DENSITIES[point_name]
+                adjustment_increment_base = -(1.0 - target_quantile) if observed_log_ratio < point_state["log_projected_distribution_ratio"] else target_quantile
+                point_state["log_projected_distribution_ratio"] += adjustment_increment_base * voice_profile_duration_scaling_multiplier * local_density_scaling_multiplier
+
+            _Clamp_Local_Density_Point_Ordering(bucket_state)
         return
 
     use_divergence_scaling_version = version_config["use_divergence_scaling_version"]
@@ -226,11 +317,11 @@ def _Update_Continuous_Voice_Profile(state, voiced_frequency_bucket_centers, rat
             upper_point_state["projected_distribution_ratio"] = median_value
 
 
-def _Continuous_Voice_Profile_Bell_Curve_Projections(state, voiced_frequency_bucket_centers, use_perfect_tracking_version):
+def _Continuous_Voice_Profile_Bell_Curve_Projections(state, voiced_frequency_bucket_centers, version_config):
     # mirrors _Extract_Bell_Curve_Projections's (center, lower_standard_deviation, upper_standard_deviation) shape so it can drop straight into _Bell_Curve_Value_2
     projections = []
     for freq_center in voiced_frequency_bucket_centers:
-        point_ratios = _Continuous_Voice_Profile_Point_Ratios(state, freq_center, use_perfect_tracking_version)
+        point_ratios = _Continuous_Voice_Profile_Point_Ratios(state, freq_center, version_config)
         median_ratio = point_ratios["median"]
         lower_ratio = point_ratios["lower_standard_deviation"]
         upper_ratio = point_ratios["upper_standard_deviation"]
@@ -238,11 +329,11 @@ def _Continuous_Voice_Profile_Bell_Curve_Projections(state, voiced_frequency_buc
     return projections
 
 
-def _Continuous_Voice_Profile_Convergence_Values(state, voiced_frequency_bucket_centers, static_bell_curve_projections, use_perfect_tracking_version):
+def _Continuous_Voice_Profile_Convergence_Values(state, voiced_frequency_bucket_centers, static_bell_curve_projections, version_config):
     sums = {point_name: 0.0 for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
     for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
         static_center, static_lower_standard_deviation, static_upper_standard_deviation = static_bell_curve_projections[freq_index]
-        point_ratios = _Continuous_Voice_Profile_Point_Ratios(state, freq_center, use_perfect_tracking_version)
+        point_ratios = _Continuous_Voice_Profile_Point_Ratios(state, freq_center, version_config)
         live_median = point_ratios["median"]
         live_lower_standard_deviation = live_median - point_ratios["lower_standard_deviation"]
         live_upper_standard_deviation = point_ratios["upper_standard_deviation"] - live_median
@@ -823,18 +914,21 @@ def Run_Element_Match_Contribution_Type_Exploration(
     # alternative pathway: learns each voice's bell curve projections on-the-fly from its own speaking turns instead of looking them up from the persisted JSON
     continuous_voice_profiling_hyperparameters = cross_type_hyperparameters.get("continuous_voice_profiling", {})
 
-    # three mutually exclusive logic paths for how a voice's bell curve points are learned: nudge_step_version is the original fixed-step-size logic, divergence_scaling_version scales its update size by how far cumulative_occurrence_percentile currently is from its target, and perfect_tracking_version keeps every observed ratio and reads the exact ratio at each target percentile straight out of that record (an idealized "best possible given the timepoints seen so far" baseline to compare the other two against)
+    # four mutually exclusive logic paths for how a voice's bell curve points are learned: nudge_step_version is the original fixed-step-size logic, divergence_scaling_version scales its update size by how far cumulative_occurrence_percentile currently is from its target, perfect_tracking_version keeps every observed ratio and reads the exact ratio at each target percentile straight out of that record (an idealized "best possible given the timepoints seen so far" baseline to compare the others against), and local_density_version runs a weighted-increment quantile hunt in log space with each step sized by the local distribution density at that point
     nudge_step_version_hyperparameters = continuous_voice_profiling_hyperparameters.get("nudge_step_version", {})
     divergence_scaling_version_hyperparameters = continuous_voice_profiling_hyperparameters.get("divergence_scaling_version", {})
     perfect_tracking_version_hyperparameters = continuous_voice_profiling_hyperparameters.get("perfect_tracking_version", {})
+    local_density_version_hyperparameters = continuous_voice_profiling_hyperparameters.get("local_density_version", {})
     use_nudge_step_version = nudge_step_version_hyperparameters.get("use_version", False)
     use_divergence_scaling_version = divergence_scaling_version_hyperparameters.get("use_version", False)
     use_perfect_tracking_version = perfect_tracking_version_hyperparameters.get("use_version", False)
+    use_local_density_version = local_density_version_hyperparameters.get("use_version", False)
     selected_continuous_voice_profile_versions = [
         version_name for version_name, version_is_selected in (
             ("nudge_step_version", use_nudge_step_version),
             ("divergence_scaling_version", use_divergence_scaling_version),
             ("perfect_tracking_version", use_perfect_tracking_version),
+            ("local_density_version", use_local_density_version),
         ) if version_is_selected
     ]
     if len(selected_continuous_voice_profile_versions) > 1:
@@ -846,18 +940,33 @@ def Run_Element_Match_Contribution_Type_Exploration(
     use_continuous_voice_profiling = use_continuous_voice_profiling_hyperparameter and use_bell_curve
 
     if use_continuous_voice_profiling and not selected_continuous_voice_profile_versions:
-        print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_continuous_voice_profiling'] is True but no version's 'use_version' is True (['nudge_step_version'], ['divergence_scaling_version'], ['perfect_tracking_version']); continuous voice profiling will be ignored for this run")
+        print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_continuous_voice_profiling'] is True but no version's 'use_version' is True (['nudge_step_version'], ['divergence_scaling_version'], ['perfect_tracking_version'], ['local_density_version']); continuous voice profiling will be ignored for this run")
         use_continuous_voice_profiling = False
 
-    if use_perfect_tracking_version:
+    if use_local_density_version:
+        starting_standard_deviations_multiplier = local_density_version_hyperparameters["starting_standard_deviations_multiplier"]
+        if starting_standard_deviations_multiplier >= 1.0:
+            print(f"Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['local_density_version']['starting_standard_deviations_multiplier'] is {starting_standard_deviations_multiplier}, but it scales the lower point below the median and its reciprocal scales the upper point above it, so a value >= 1.0 inverts that ordering; the initial spread will be clamped to a minimum instead")
+        continuous_voice_profile_version_config = {
+            "use_perfect_tracking_version": False,
+            "use_divergence_scaling_version": False,
+            "use_local_density_version": True,
+            "starting_standard_deviations_multiplier": starting_standard_deviations_multiplier,
+            "duration_scaling_multiplier_initialization_base": local_density_version_hyperparameters["duration_scaling_multiplier_initialization_base"],
+            # the bound is configured in seconds but every step is per timepoint, so convert once here rather than per update
+            "scaling_duration_maximum_timepoints": local_density_version_hyperparameters["scaling_duration_maximum_bound"] / Spectrogram_Window_Jump_In_Seconds,
+        }
+    elif use_perfect_tracking_version:
         continuous_voice_profile_version_config = {
             "use_perfect_tracking_version": True,
             "use_divergence_scaling_version": False,
+            "use_local_density_version": False,
         }
     elif use_divergence_scaling_version:
         continuous_voice_profile_version_config = {
             "use_perfect_tracking_version": False,
             "use_divergence_scaling_version": True,
+            "use_local_density_version": False,
             "occurrence_percentile_cumulation_update_power": divergence_scaling_version_hyperparameters["occurrence_percentile_cumulation_update_power"],
             "distribution_ratio_cumulation_update_power": divergence_scaling_version_hyperparameters["distribution_ratio_cumulation_update_power"],
             "divergence_scaling_power": divergence_scaling_version_hyperparameters["divergence_scaling_power"],
@@ -867,6 +976,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
         continuous_voice_profile_version_config = {
             "use_perfect_tracking_version": False,
             "use_divergence_scaling_version": False,
+            "use_local_density_version": False,
             "projected_distribution_ratio_nudge_step": nudge_step_version_hyperparameters.get("projected_distribution_ratio_nudge_step", 1.0),
             "voiced_timepoints_cumulation_weight_power": nudge_step_version_hyperparameters.get("voiced_timepoints_cumulation_weight_power", 1.0),
         }
@@ -1123,7 +1233,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
                             if include_continuous_voice_profile_convergence_chart:
                                 if is_voice_profile_ready:
-                                    convergence_values = _Continuous_Voice_Profile_Convergence_Values(continuous_voice_profile_state, voiced_frequency_bucket_centers, bell_curve_projections, use_perfect_tracking_version)
+                                    convergence_values = _Continuous_Voice_Profile_Convergence_Values(continuous_voice_profile_state, voiced_frequency_bucket_centers, bell_curve_projections, continuous_voice_profile_version_config)
                                 else:
                                     convergence_values = {point_name: math.nan for point_name, _, _ in _CONTINUOUS_VOICE_PROFILE_POINTS}
                                 for point_name, value in convergence_values.items():
@@ -1135,7 +1245,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                                 processed_timepoint_count += 1
                                 continue
 
-                            active_bell_curve_projections = _Continuous_Voice_Profile_Bell_Curve_Projections(continuous_voice_profile_state, voiced_frequency_bucket_centers, use_perfect_tracking_version)
+                            active_bell_curve_projections = _Continuous_Voice_Profile_Bell_Curve_Projections(continuous_voice_profile_state, voiced_frequency_bucket_centers, continuous_voice_profile_version_config)
                             active_bucket_medians = [projection[0] for projection in active_bell_curve_projections] if need_bucket_medians else bucket_medians
                         else:
                             active_bell_curve_projections = bell_curve_projections

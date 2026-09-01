@@ -44,7 +44,7 @@ Audio_File_Set = ["normal_1", "no_nose_1", "round_1"]
 #Audio_File_Set = ["round_1", "round_2", "round_3"]
 
 Analysis_Directory_Path = "tmp/media/layered_subdistributions/"
-Analysis_Directory_Folder = "6000_continuous_divergence_scaling_test_3"
+Analysis_Directory_Folder = "6000_local_density_test_4"
 Analysis_Directory = Analysis_Directory_Path + Analysis_Directory_Folder + "/"
 Analysis_Run_Name = "lookup"
 

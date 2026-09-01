@@ -135,10 +135,17 @@ def Run_Element_Match_Contribution_Type_Analysis():
                 }
             },
             "deviation_scaled_percentile_proximity": {
-                "include_variant": True,
+                "include_variant": False,
                 "hyperparameters": {
                     "percentile_proximity_power_curve": 2.0,
-                    "deviation_scaling_power_curve": 1.0,
+                    "deviation_scaling_power_curve": 1.0
+                }
+            },
+            "deviation_scaled_percentile_deviation": {
+                "include_variant": True,
+                "hyperparameters": {
+                    "deviation_type": "occurrence_percentile_inverse_deviation",
+                    "deviation_scaling_power_curve": 1.0
                 }
             },
             "accumulative_deviation":{
@@ -170,12 +177,18 @@ def Run_Element_Match_Contribution_Type_Analysis():
                     "voiced_timepoints_cumulation_weight_power": 0.5
                 },
                 "divergence_scaling_version":{
-                    "use_version": True,
+                    "use_version": False,
                     "cumulation_weight_initialization_base": 50.0,
                     "occurrence_percentile_cumulation_update_power": 0.8,
                     "distribution_ratio_cumulation_update_power": 0.8,
                     "divergence_scaling_power": 0.5
                 },
+                "local_density_version": {
+                    "use_version": True,
+                    "scaling_duration_maximum_bound": 5.0,          # in seconds; converted to timepoints internally
+                    "starting_standard_deviations_multiplier": 0.6,  # < 1.0, since greater than 1.0 would go negative
+                    "duration_scaling_multiplier_initialization_base": 10.0,
+},
                 "perfect_tracking_version":{
                     "use_version": False
                 }
