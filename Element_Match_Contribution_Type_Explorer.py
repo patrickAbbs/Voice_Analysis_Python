@@ -14,6 +14,7 @@ from Subdistribution_Extractor import Convert_Occurrence_Counts_To_Ratios
 from Layered_Occurrence_Count_Populator import Process_Audio, Format_Half_Life_For_Filename
 from Layered_Subdistribution_Generator import Load_Layered_State, Get_Voiced_Frequency_Bucket_Centers
 from Color_Assignment_Manager import Get_Speaker_Color
+from matplotlib.colors import to_rgb
 from Global_Helper_Functions import Convert_Half_Life_To_Cumulation_Weight, Weighted_Average
 from Simulated_Conversation_Generator import Conversation_Sequence_Json_Directory
 from Match_Contribution_Run_Comparer import Record_Run_Configuration
@@ -93,6 +94,56 @@ _PER_BUCKET_KEYS = {
 }
 
 
+# --- voice profiles (a profile is one voice_id, or an agglomeration list of several treated as one) ---
+
+def _Voice_Profile_Members(voice_id_entry):
+    return list(voice_id_entry) if isinstance(voice_id_entry, (list, tuple)) else [voice_id_entry]
+
+
+def _Voice_Profile_Label(voice_id_entry):
+    # the profile's identity everywhere downstream (result keys, chart titles, filenames); "+" cannot appear in a speaker id, so an agglomeration label can never collide with a real speaker's
+    members = _Voice_Profile_Members(voice_id_entry)
+    return members[0] if len(members) == 1 else "+".join(members)
+
+
+def _Voice_Profile_Color(voice_id_entry):
+    members = _Voice_Profile_Members(voice_id_entry)
+    if len(members) == 1:
+        return Get_Speaker_Color(members[0])
+    # an agglomeration is a transient analysis construct rather than an entity worth a permanent slot, so its color is averaged from its members' rather than assigned (and persisted) by Get_Speaker_Color
+    member_channel_values = zip(*(to_rgb(Get_Speaker_Color(member)) for member in members))
+    return tuple(sum(channel) / len(members) for channel in member_channel_values)
+
+
+def _Merge_Frequency_Amount_Occurrence_Counts(member_states):
+    """Combine several speakers' occurrence-count profiles into the one an agglomerated profile is built from."""
+    if len(member_states) == 1:
+        return member_states[0]["frequency_amount_occurrence_counts"]
+
+    bucket_count = min(len(state["frequency_amount_occurrence_counts"]) for state in member_states)
+    merged_counts = []
+    for bucket_index in range(bucket_count):
+        member_buckets = [state["frequency_amount_occurrence_counts"][bucket_index] for state in member_states]
+        union_ratios = numpy.array(sorted(set().union(*(bucket.keys() for bucket in member_buckets))))
+        if len(union_ratios) == 0:
+            merged_counts.append({})
+            continue
+
+        summed_counts = numpy.zeros(len(union_ratios), dtype=numpy.int64)
+        for bucket in member_buckets:
+            if not bucket:
+                continue
+            member_ratios = numpy.array(sorted(bucket.keys()))
+            member_counts = numpy.array([bucket[ratio] for ratio in member_ratios], dtype=numpy.int64)
+            # counts[ratio] is "how many timepoints landed at or above this ratio", a step function that only changes at observed ratios — so a member's count at some other member's ratio is its count at the nearest observed ratio at or above it, and 0 past the end of its observations
+            insertion_indices = numpy.searchsorted(member_ratios, union_ratios, side="left")
+            within_range = insertion_indices < len(member_ratios)
+            summed_counts += numpy.where(within_range, member_counts[numpy.clip(insertion_indices, 0, len(member_ratios) - 1)], 0)
+
+        merged_counts.append({float(ratio): int(count) for ratio, count in zip(union_ratios, summed_counts)})
+    return merged_counts
+
+
 # --- internal helpers ---
 
 def _Build_Sorted_Keys(inverted_occurrence_ratios):
@@ -163,6 +214,11 @@ def _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers, versio
         # a starting_standard_deviations_multiplier >= 1.0 would invert the ordering, so normalize it up front rather than letting the first update work from an invalid spread
         for bucket_state in state["buckets"].values():
             _Clamp_Local_Density_Point_Ordering(bucket_state)
+
+        if version_config["use_initial_exact_value_tracking"]:
+            # the projections seeded above are placeholders under this pathway: they are replaced wholesale once enough observations have been banked to read the three points straight off the data
+            state["initial_log_ratio_records"] = {freq_center: [] for freq_center in voiced_frequency_bucket_centers}
+            state["initial_exact_value_tracking_complete"] = False
         return state
 
     # projected_distribution_ratio starts at an even split across buckets (1/bucket_count) rather than 0.0, and cumulative_occurrence_percentile starts at its own point's target rather than 0.0 — a neutral "no evidence yet" starting point for both versions rather than a value the very first updates would have to climb out of
@@ -237,6 +293,26 @@ def _Update_Continuous_Voice_Profile(state, voiced_frequency_bucket_centers, rat
         return
 
     if version_config["use_local_density_version"]:
+        if version_config["use_initial_exact_value_tracking"] and not state["initial_exact_value_tracking_complete"]:
+            # alternative initialization: bank every observation until the readiness threshold is reached, then read the three points straight off the collected data instead of hunting toward them from an arbitrary starting spread. voice_timepoints_count still advances normally throughout, so the duration scaling multiplier afterwards is exactly what it would have been without this pathway.
+            initial_log_ratio_records = state["initial_log_ratio_records"]
+            for freq_center in voiced_frequency_bucket_centers:
+                initial_log_ratio_records[freq_center].append(math.log(max(ratio_by_bucket[freq_center], _LOCAL_DENSITY_MINIMUM_RATIO)))
+
+            if voice_timepoints_count >= version_config["initial_exact_value_tracking_timepoints"]:
+                for freq_center in voiced_frequency_bucket_centers:
+                    sorted_log_ratios = sorted(initial_log_ratio_records[freq_center])
+                    bucket_state = state["buckets"][freq_center]
+                    for point_name, target_quantile, _ in _CONTINUOUS_VOICE_PROFILE_POINTS:
+                        # the same rank-based percentile lookup perfect_tracking_version uses, so "the 0.15865 percentile observation" means the same thing everywhere in this module
+                        bucket_state[point_name]["log_projected_distribution_ratio"] = _Perfect_Tracking_Ratio_At_Percentile(sorted_log_ratios, target_quantile)
+                    # ties in the observations could leave two points equal, which would zero that point's density multiplier and freeze it
+                    _Clamp_Local_Density_Point_Ordering(bucket_state)
+                state["initial_exact_value_tracking_complete"] = True
+                # the banked observations exist only to seed the projections, so they are released rather than carried for the rest of the run
+                state["initial_log_ratio_records"] = {}
+            return
+
         # a weighted-increment quantile hunt in log space: each point steps by +target_quantile when the observation lands above it and -(1 - target_quantile) when below, so its expected step is zero exactly at its target quantile. The step is then scaled by (a) how far along this voice's profile is, and (b) the local spread at that point, so a point sitting where observations are sparse takes proportionally larger steps.
         scaling_duration_maximum_timepoints = version_config["scaling_duration_maximum_timepoints"]
         elapsed_timepoints = voice_timepoints_count + version_config["duration_scaling_multiplier_initialization_base"]
@@ -539,15 +615,19 @@ def _Compute_All_Speaker_Metrics(variant, voice_ids, per_voice_results, sequence
     transition_durations = []
     match_differentiation_terms = []
 
-    # audio periods for a speaker whose voice isn't in voice_value_lists (not among the compared voices) are excluded entirely, from both numerator and denominator of every metric
-    for speaker_id, start_index, end_index in speaker_segments:
+    # audio periods for a speaker whose voice isn't in voice_value_lists are excluded entirely, from both numerator and denominator of every metric. An agglomerated profile's label ("A+B") never equals a turn's speaker_id, so it is always a competing voice and never the speaker's own — matching one more strongly than the speaker's own single-voice profile is a failure, which is the point of including one.
+    for speaker_id, start_index, end_index, first_voiced_index, last_voiced_index in speaker_segments:
         if start_index >= end_index or speaker_id not in voice_value_lists:
+            continue
+        if first_voiced_index is None:
+            # a turn with no voiced timepoints at all has no speech to identify, so it contributes to no metric
             continue
 
         own_values = voice_value_lists[speaker_id]
         first_reached_index = None
 
-        for timepoint_index in range(start_index, end_index):
+        # the leading/trailing silence inside a turn's audio is on the timeline but isn't this speaker talking, so identification is only scored across the turn's voiced span
+        for timepoint_index in range(first_voiced_index, last_voiced_index + 1):
             own_value = own_values[timepoint_index] if timepoint_index < len(own_values) else math.nan
             if math.isnan(own_value):
                 # a NaN own-value (e.g. a leading non-voiced timepoint under include_non_voiced_timepoints) can't meaningfully be compared, so this timepoint is skipped entirely, same as a not-in-voice_ids period
@@ -578,8 +658,8 @@ def _Compute_All_Speaker_Metrics(variant, voice_ids, per_voice_results, sequence
                     match_differentiation_terms.append(sum(ratio_terms) / len(ratio_terms))
 
         if want_transition_duration:
-            # if the speaker's voice never reaches the highest value within its own turn, the full turn duration is used as the elapsed time
-            elapsed_timepoint_count = (first_reached_index - start_index) if first_reached_index is not None else (end_index - start_index)
+            # measured from the turn's first voiced timepoint rather than from the start of its audio, so leading silence isn't counted as time the speaker spent unidentified; if the speaker's voice never reaches the highest value within its own turn, the full voiced span is used as the elapsed time
+            elapsed_timepoint_count = (first_reached_index - first_voiced_index) if first_reached_index is not None else (last_voiced_index + 1 - first_voiced_index)
             transition_durations.append(elapsed_timepoint_count * Spectrogram_Window_Jump_In_Seconds)
 
     metrics = {}
@@ -604,35 +684,28 @@ def _Make_X_Values(point_count):
 
 
 def _Build_Sequence_Filename_Suffix(speaker_segments):
-    return "_".join(speaker_id for speaker_id, _, _ in speaker_segments)
+    return "_".join(segment[0] for segment in speaker_segments)
 
 
 def _Build_Sequence_Display_Label(speaker_segments):
-    return " → ".join(speaker_id for speaker_id, _, _ in speaker_segments)
+    return " → ".join(segment[0] for segment in speaker_segments)
 
 
-def _Draw_Speaker_Segment_Annotations(axis, speaker_segments, include_leading_line=False):
-    if include_leading_line:
-        for speaker_id, start_index, end_index in speaker_segments:
-            if start_index >= end_index:
-                continue
-            # a line drawn exactly at the first timepoint (x=0) would sit on top of the axis's left spine and be hidden, so nudge it forward by half a timepoint step
-            leading_line_x = Spectrogram_Window_Jump_In_Seconds / 2.0
-            axis.axvline(leading_line_x, color=Get_Speaker_Color(speaker_id), linestyle=":", linewidth=1.0)
-            break
-
-    for index in range(1, len(speaker_segments)):
-        previous_speaker_id, _, _ = speaker_segments[index - 1]
-        speaker_id, start_index, end_index = speaker_segments[index]
-        if start_index >= end_index or speaker_id == previous_speaker_id:
+def _Draw_Speaker_Segment_Annotations(axis, speaker_segments):
+    # two lines per turn — at its first and last voiced timepoint — rather than one per speaker change, so the silent gaps between speakers (which are on the timeline but excluded from the identification metrics) are visible as the space between one turn's closing line and the next turn's opening line
+    for speaker_id, start_index, end_index, first_voiced_index, last_voiced_index in speaker_segments:
+        if start_index >= end_index or first_voiced_index is None:
             continue
-        boundary_x = start_index * Spectrogram_Window_Jump_In_Seconds
-        axis.axvline(boundary_x, color=Get_Speaker_Color(speaker_id), linestyle=":", linewidth=1.0)
+        speaker_color = Get_Speaker_Color(speaker_id)
+        for boundary_index in (first_voiced_index, last_voiced_index):
+            axis.axvline(boundary_index * Spectrogram_Window_Jump_In_Seconds, color=speaker_color, linestyle=":", linewidth=1.0)
 
-    for speaker_id, start_index, end_index in speaker_segments:
+    for speaker_id, start_index, end_index, first_voiced_index, last_voiced_index in speaker_segments:
         if start_index >= end_index:
             continue
-        midpoint_x = ((start_index + end_index - 1) / 2.0) * Spectrogram_Window_Jump_In_Seconds
+        # centered on the voiced span so the label sits between that turn's two boundary lines
+        label_span = (first_voiced_index, last_voiced_index) if first_voiced_index is not None else (start_index, end_index - 1)
+        midpoint_x = (sum(label_span) / 2.0) * Spectrogram_Window_Jump_In_Seconds
         axis.annotate(
             speaker_id, xy=(midpoint_x, 0.0), xycoords=("data", "axes fraction"),
             xytext=(0, -15), textcoords="offset points",
@@ -640,7 +713,7 @@ def _Draw_Speaker_Segment_Annotations(axis, speaker_segments, include_leading_li
         )
 
 
-def Generate_Per_Speaker_Overall_Chart(voice_id, sequence_index, included_variants, overall_ylims, data):
+def Generate_Per_Speaker_Overall_Chart(voice_id, sequence_index, included_variants, overall_ylims, data, voice_profile_color):
     variant_count = len(included_variants)
     figure, axes = pyplot.subplots(variant_count, 1, figsize=(20, 5 * variant_count))
     if variant_count == 1:
@@ -653,9 +726,9 @@ def Generate_Per_Speaker_Overall_Chart(voice_id, sequence_index, included_varian
         values = data[_OVERALL_KEYS[variant]]
         bucket_x_values = _Make_X_Values(len(values))
 
-        axis.plot(bucket_x_values, values, color=Get_Speaker_Color(voice_id), linewidth=0.75)
+        axis.plot(bucket_x_values, values, color=voice_profile_color, linewidth=0.75)
 
-        _Draw_Speaker_Segment_Annotations(axis, speaker_segments, include_leading_line=True)
+        _Draw_Speaker_Segment_Annotations(axis, speaker_segments)
 
         y_limits = overall_ylims[variant]
         axis.set_ylim(y_limits[0], y_limits[1])
@@ -729,7 +802,7 @@ def Generate_Per_Speaker_Per_Bucket_Chart(voice_id, sequence_index, included_var
     print(f"Element_Match_Contribution_Type_Explorer: per-bucket chart saved to '{output_path}'")
 
 
-def Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, all_results):
+def Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, all_results, voice_profile_members):
     variant_count = len(included_variants)
     figure, axes = pyplot.subplots(variant_count, 1, figsize=(20, 5 * variant_count))
     if variant_count == 1:
@@ -741,11 +814,12 @@ def Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, 
         for data in all_results.values():
             values = data[overall_key]
             bucket_x_values = _Make_X_Values(len(values))
-            for speaker_id, start_index, end_index in data["speaker_segments"]:
+            for speaker_id, start_index, end_index, _, _ in data["speaker_segments"]:
                 if start_index >= end_index:
                     continue
                 segment_start = max(start_index - 1, 0)
-                linewidth = 1.5 if speaker_id == voice_id else 0.75
+                # a turn is drawn thick when this profile is supposed to match it, which for an agglomerated profile means any of its member voices
+                linewidth = 1.5 if speaker_id in voice_profile_members else 0.75
                 label = speaker_id if speaker_id not in labeled_speaker_ids else None
                 labeled_speaker_ids.add(speaker_id)
                 axis.plot(
@@ -768,7 +842,7 @@ def Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, 
     print(f"Element_Match_Contribution_Type_Explorer: combined chart saved to '{output_path}'")
 
 
-def Generate_All_Speaker_Overall_Chart(voice_ids, sequence_index, included_variants, overall_ylims, per_voice_results, speaker_segments, metric_inclusions):
+def Generate_All_Speaker_Overall_Chart(voice_ids, sequence_index, included_variants, overall_ylims, per_voice_results, speaker_segments, metric_inclusions, voice_profile_colors):
     variant_count = len(included_variants)
     figure, axes = pyplot.subplots(variant_count, 1, figsize=(20, 5 * variant_count))
     if variant_count == 1:
@@ -788,9 +862,9 @@ def Generate_All_Speaker_Overall_Chart(voice_ids, sequence_index, included_varia
             bucket_x_values = _Make_X_Values(len(values))
             if bucket_x_values:
                 max_x_value = max(max_x_value, bucket_x_values[-1])
-            axis.plot(bucket_x_values, values, color=Get_Speaker_Color(voice_id), linewidth=0.75, label=voice_id)
+            axis.plot(bucket_x_values, values, color=voice_profile_colors[voice_id], linewidth=0.75, label=voice_id)
 
-        _Draw_Speaker_Segment_Annotations(axis, speaker_segments, include_leading_line=True)
+        _Draw_Speaker_Segment_Annotations(axis, speaker_segments)
 
         y_limits = overall_ylims[variant]
         axis.set_ylim(y_limits[0], y_limits[1])
@@ -830,7 +904,7 @@ def _Compute_Continuous_Voice_Profile_Convergence_Ylim(per_voice_results, sequen
     return (global_minimum, 0.0)
 
 
-def Generate_Continuous_Voice_Profile_Convergence_Chart(voice_ids, comparative_voices_audio_set, per_voice_results, ylim):
+def Generate_Continuous_Voice_Profile_Convergence_Chart(voice_ids, comparative_voices_audio_set, per_voice_results, ylim, voice_profile_colors):
     sequence_count = len(comparative_voices_audio_set)
     figure, axes = pyplot.subplots(sequence_count, 1, figsize=(20, 5 * sequence_count))
     if sequence_count == 1:
@@ -850,7 +924,7 @@ def Generate_Continuous_Voice_Profile_Convergence_Chart(voice_ids, comparative_v
             convergence = all_results[sequence_index].get("continuous_voice_profile_convergence")
             if not convergence:
                 continue
-            color = Get_Speaker_Color(voice_id)
+            color = voice_profile_colors[voice_id]
             for point_name, _, line_style in _CONTINUOUS_VOICE_PROFILE_POINTS:
                 values = convergence[point_name]
                 bucket_x_values = _Make_X_Values(len(values))
@@ -858,7 +932,7 @@ def Generate_Continuous_Voice_Profile_Convergence_Chart(voice_ids, comparative_v
                     max_x_value = max(max_x_value, bucket_x_values[-1])
                 axis.plot(bucket_x_values, values, color=color, linestyle=line_style, linewidth=0.75, label=f"{voice_id} {point_name}")
 
-        _Draw_Speaker_Segment_Annotations(axis, speaker_segments, include_leading_line=True)
+        _Draw_Speaker_Segment_Annotations(axis, speaker_segments)
 
         axis.set_ylim(ylim[0], ylim[1])
         axis.set_xlim(0, max_x_value)
@@ -906,6 +980,24 @@ def Run_Element_Match_Contribution_Type_Exploration(
     )
     use_bell_curve = cross_type_hyperparameters.get("use_bell_curve_percentile_projection", False)
     use_signal_rate_simulation = cross_type_hyperparameters.get("use_signal_rate_simulation", False)
+    # alternative signal-rate pathway: instead of one fixed cumulation weight, the weight slides down toward a lower bound through non-voiced stretches and climbs back to an upper bound while a voice is speaking, so signal rates collapse faster across the gaps between speaker turns and recover once the next turn starts
+    dynamic_signal_rate_cumulation_hyperparameters = cross_type_hyperparameters.get("dynamic_signal_rate_cumulation", {})
+    use_dynamic_signal_rate_half_life = dynamic_signal_rate_cumulation_hyperparameters.get("use_dynamic_signal_rate_half_life", False)
+    signal_rate_cumulation_weight_upper_bound = signal_rate_cumulation_weight_lower_bound = None
+    gap_cumulation_weight_decrement = voice_cumulation_weight_increment = 0.0
+    if use_dynamic_signal_rate_half_life:
+        # a longer half life means a heavier weight on the running value, so the upper-bound half life yields the upper-bound weight
+        signal_rate_cumulation_weight_upper_bound = Convert_Half_Life_To_Cumulation_Weight(
+            Spectrogram_Window_Jump_In_Seconds, dynamic_signal_rate_cumulation_hyperparameters["signal_rate_half_life_upper_bound"]
+        )
+        signal_rate_cumulation_weight_lower_bound = Convert_Half_Life_To_Cumulation_Weight(
+            Spectrogram_Window_Jump_In_Seconds, dynamic_signal_rate_cumulation_hyperparameters["signal_rate_half_life_lower_bound"]
+        )
+        # each configured duration is how long it should take to traverse the whole weight range, converted into a per-timepoint step
+        signal_rate_cumulation_weight_span = signal_rate_cumulation_weight_upper_bound - signal_rate_cumulation_weight_lower_bound
+        gap_cumulation_weight_decrement = signal_rate_cumulation_weight_span * (Spectrogram_Window_Jump_In_Seconds / dynamic_signal_rate_cumulation_hyperparameters["gap_cumulation_decrease_duration"])
+        voice_cumulation_weight_increment = signal_rate_cumulation_weight_span * (Spectrogram_Window_Jump_In_Seconds / dynamic_signal_rate_cumulation_hyperparameters["voice_cumulation_increase_duration"])
+
     include_non_voiced_timepoints_hyperparameter = cross_type_hyperparameters.get("include_non_voiced_timepoints", False)
     if include_non_voiced_timepoints_hyperparameter and not use_signal_rate_simulation:
         print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['include_non_voiced_timepoints'] is True but 'use_signal_rate_simulation' is False; include_non_voiced_timepoints requires use_signal_rate_simulation and will be ignored for this run")
@@ -943,10 +1035,18 @@ def Run_Element_Match_Contribution_Type_Exploration(
         print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_continuous_voice_profiling'] is True but no version's 'use_version' is True (['nudge_step_version'], ['divergence_scaling_version'], ['perfect_tracking_version'], ['local_density_version']); continuous voice profiling will be ignored for this run")
         use_continuous_voice_profiling = False
 
+    # parsed before the per-version config below, which reads voice_profile_timepoints_threshold for local_density_version's exact-value initialization period
+    continue_voice_profiles_across_conversations = continuous_voice_profiling_hyperparameters.get("continue_voice_profiles_across_conversations", False)
+    voice_profile_timepoints_threshold = continuous_voice_profiling_hyperparameters.get("voice_profile_timepoints_threshold", 0)
+
     if use_local_density_version:
         starting_standard_deviations_multiplier = local_density_version_hyperparameters["starting_standard_deviations_multiplier"]
         if starting_standard_deviations_multiplier >= 1.0:
             print(f"Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['local_density_version']['starting_standard_deviations_multiplier'] is {starting_standard_deviations_multiplier}, but it scales the lower point below the median and its reciprocal scales the upper point above it, so a value >= 1.0 inverts that ordering; the initial spread will be clamped to a minimum instead")
+        use_initial_exact_value_tracking = local_density_version_hyperparameters.get("use_initial_exact_value_tracking", False)
+        if use_initial_exact_value_tracking and voice_profile_timepoints_threshold <= 0:
+            print(f"Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['local_density_version']['use_initial_exact_value_tracking'] is True but 'voice_profile_timepoints_threshold' is {voice_profile_timepoints_threshold}; that threshold is the number of observations the exact-value initialization collects before seeding, so with none to collect the option is ignored for this run")
+            use_initial_exact_value_tracking = False
         continuous_voice_profile_version_config = {
             "use_perfect_tracking_version": False,
             "use_divergence_scaling_version": False,
@@ -955,6 +1055,9 @@ def Run_Element_Match_Contribution_Type_Exploration(
             "duration_scaling_multiplier_initialization_base": local_density_version_hyperparameters["duration_scaling_multiplier_initialization_base"],
             # the bound is configured in seconds but every step is per timepoint, so convert once here rather than per update
             "scaling_duration_maximum_timepoints": local_density_version_hyperparameters["scaling_duration_maximum_bound"] / Spectrogram_Window_Jump_In_Seconds,
+            "use_initial_exact_value_tracking": use_initial_exact_value_tracking,
+            # the collection period is exactly the readiness threshold, so the profile is seeded from data on the same timepoint it would otherwise have become usable
+            "initial_exact_value_tracking_timepoints": voice_profile_timepoints_threshold,
         }
     elif use_perfect_tracking_version:
         continuous_voice_profile_version_config = {
@@ -985,9 +1088,6 @@ def Run_Element_Match_Contribution_Type_Exploration(
     if use_cumulative_signal_rate_distribution_ratios_hyperparameter and not use_signal_rate_simulation:
         print("Element_Match_Contribution_Type_Explorer: WARNING - cross_type_hyperparameters['continuous_voice_profiling']['use_cumulative_signal_rate_distribution_ratios'] is True but 'use_signal_rate_simulation' is False; timepoint_ratio will be used instead of signal_rate_ratio for continuous voice profiling in this run")
     use_cumulative_signal_rate_distribution_ratios = use_cumulative_signal_rate_distribution_ratios_hyperparameter and use_signal_rate_simulation
-
-    continue_voice_profiles_across_conversations = continuous_voice_profiling_hyperparameters.get("continue_voice_profiles_across_conversations", False)
-    voice_profile_timepoints_threshold = continuous_voice_profiling_hyperparameters.get("voice_profile_timepoints_threshold", 0)
 
     # the bell-curve-dependent variants read lower/upper standard deviations that only exist on the bell curve pathway, so their inclusion is additionally gated on use_bell_curve_percentile_projection rather than on include_variant alone
     if not use_bell_curve:
@@ -1103,7 +1203,7 @@ def Run_Element_Match_Contribution_Type_Exploration(
                     distribution, audio_frequency_bucket_centers, timepoint_phonemes = Process_Audio(speaker_id, audio_name)
                     audio_cache[cache_key] = (distribution, timepoint_phonemes)
 
-    def _Process_Sequences_For_Voice(voiced_frequency_bucket_centers, voiced_frequency_limit_index, inverted_occurrence_ratios, sorted_keys_per_bucket, bell_curve_projections, bucket_medians):
+    def _Process_Sequences_For_Voice(voice_profile_members, voiced_frequency_bucket_centers, voiced_frequency_limit_index, inverted_occurrence_ratios, sorted_keys_per_bucket, bell_curve_projections, bucket_medians):
         all_results = {}
 
         # if continuity across conversations is on, this voice's profile is created once here and mutated in place across every sequence below; otherwise it's recreated per-sequence further down
@@ -1114,6 +1214,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
             # both signal-rate running totals reset together at the start of every sequence, so a new conversation never inherits a stale denominator/numerator pairing from the previous one
             total_distribution_signal_rate = 0.0
             distribution_ratio_signal_rates = {freq: 0.0 for freq in voiced_frequency_bucket_centers}
+            # equal to occurrence_ratio_cumulation_weight and never changes unless the dynamic pathway is active; reset per sequence alongside the totals it governs
+            signal_rate_cumulation_weight = occurrence_ratio_cumulation_weight
 
             if use_continuous_voice_profiling and not continue_voice_profiles_across_conversations:
                 continuous_voice_profile_state = _Init_Continuous_Voice_Profile_State(voiced_frequency_bucket_centers, continuous_voice_profile_version_config)
@@ -1181,11 +1283,18 @@ def Run_Element_Match_Contribution_Type_Exploration(
                         deviation_scaled_percentile_deviations[null_freq_center].append(math.nan)
                     average_deviation_scaled_percentile_deviations.append(math.nan)
 
+            previous_speaker_id = None
             for speaker_id, audio_list in sub_sequences:
                 segment_start_index = processed_timepoint_count + 1
-                # the very first valid timepoint of a turn where the speaker is the voice_id itself resets accumulative_deviation tracking to 0, rather than continuing from wherever it left off
-                pending_accumulative_deviation_reset = include_accumulative_deviation and accumulative_deviation_use_self_tracking_reset and speaker_id == voice_id
-                is_own_voice_turn = use_continuous_voice_profiling and speaker_id == voice_id
+                speaker_is_profile_member = speaker_id in voice_profile_members
+                # the very first valid timepoint of a turn where the speaker belongs to this profile resets accumulative_deviation tracking to 0, rather than continuing from wherever it left off — but back-to-back turns by two members of the same agglomerated profile are one continuous stretch as far as that profile is concerned, so no reset happens between them
+                pending_accumulative_deviation_reset = (
+                    include_accumulative_deviation and accumulative_deviation_use_self_tracking_reset
+                    and speaker_is_profile_member and previous_speaker_id not in voice_profile_members
+                )
+                is_own_voice_turn = use_continuous_voice_profiling and speaker_is_profile_member
+                turn_first_voiced_index = None
+                turn_last_voiced_index = None
 
                 for audio_name in audio_list:
                     distribution, timepoint_phonemes = audio_cache[(speaker_id, audio_name)]
@@ -1196,16 +1305,29 @@ def Run_Element_Match_Contribution_Type_Exploration(
                         if not timepoint_is_voiced and not include_non_voiced_timepoints:
                             continue
 
+                        if timepoint_is_voiced:
+                            # recorded before any of the continues below, so the turn's voiced span stays purely audio-derived and identical across every voice profile (charts and metrics rely on that)
+                            if turn_first_voiced_index is None:
+                                turn_first_voiced_index = processed_timepoint_count + 1
+                            turn_last_voiced_index = processed_timepoint_count + 1
+
                         if use_signal_rate_simulation:
+                            if use_dynamic_signal_rate_half_life:
+                                # adjusted before this timepoint's own update, so the weight always reflects whether this timepoint is speech or gap. Both running totals are scaled by the same weight, so a changing weight still leaves signal_rate_ratio flat across a non-voiced stretch — it just shrinks both sides faster, which is what makes the first voiced timepoint after a gap pull the ratio back harder.
+                                if timepoint_is_voiced:
+                                    signal_rate_cumulation_weight = min(signal_rate_cumulation_weight + voice_cumulation_weight_increment, signal_rate_cumulation_weight_upper_bound)
+                                else:
+                                    signal_rate_cumulation_weight = max(signal_rate_cumulation_weight - gap_cumulation_weight_decrement, signal_rate_cumulation_weight_lower_bound)
+
                             # non-voiced timepoints (only reachable here when include_non_voiced_timepoints is True) decay both running totals toward 0 instead of being pulled toward this timepoint's real values, which keeps their ratio — and everything computed from it — unchanged for the duration of a non-voiced stretch
                             signal_rate_second_value = 1.0 if timepoint_is_voiced else 0.0
                             # total_distribution_signal_rate and every bucket's distribution_ratio_signal_rates must be updated for this timepoint before any bucket below can compute its signal_rate_ratio
-                            total_distribution_signal_rate = Weighted_Average(total_distribution_signal_rate, occurrence_ratio_cumulation_weight, signal_rate_second_value, 1.0 - occurrence_ratio_cumulation_weight)
+                            total_distribution_signal_rate = Weighted_Average(total_distribution_signal_rate, signal_rate_cumulation_weight, signal_rate_second_value, 1.0 - signal_rate_cumulation_weight)
                             for freq_index, freq_center in enumerate(voiced_frequency_bucket_centers):
                                 signal_rate_timepoint_ratio = float(distribution[freq_index][timepoint_index]) if timepoint_is_voiced else 0.0
                                 distribution_ratio_signal_rates[freq_center] = Weighted_Average(
-                                    distribution_ratio_signal_rates[freq_center], occurrence_ratio_cumulation_weight,
-                                    signal_rate_timepoint_ratio, 1.0 - occurrence_ratio_cumulation_weight
+                                    distribution_ratio_signal_rates[freq_center], signal_rate_cumulation_weight,
+                                    signal_rate_timepoint_ratio, 1.0 - signal_rate_cumulation_weight
                                 )
 
                         if include_non_voiced_timepoints and total_distribution_signal_rate == 0.0:
@@ -1418,7 +1540,9 @@ def Run_Element_Match_Contribution_Type_Exploration(
                         processed_timepoint_count += 1
 
                 segment_end_index = processed_timepoint_count + 1
-                speaker_segments.append((speaker_id, segment_start_index, segment_end_index))
+                # the voiced span trims the silence at the head/tail of a turn's audio: it still belongs to the timeline (signal rates keep decaying through it) but not to the speaker's actual speech
+                speaker_segments.append((speaker_id, segment_start_index, segment_end_index, turn_first_voiced_index, turn_last_voiced_index))
+                previous_speaker_id = speaker_id
 
             speaker_data = {"speaker_segments": speaker_segments}
             if need_cumulative_comparative_occurrence_ratios:
@@ -1454,17 +1578,34 @@ def Run_Element_Match_Contribution_Type_Exploration(
     per_voice_results = {}
     per_voice_ylims = {}
     per_voice_voiced_frequency_bucket_centers = {}
+    voice_profile_members_by_label = {}
+    voice_profile_colors = {}
 
-    for voice_id in voice_ids:
-        state_path = Json_Directory + f"Speaker_{voice_id}_Frequency_Amount_Occurrence_Counts{Format_Half_Life_For_Filename(voice_profile_half_life)}.json"
-        state = Load_Layered_State(state_path)
-        if state is None:
-            print(f"Element_Match_Contribution_Type_Explorer: no data found for voice_id '{voice_id}', skipping")
+    for voice_id_entry in voice_ids:
+        voice_profile_members = _Voice_Profile_Members(voice_id_entry)
+        voice_profile_label = _Voice_Profile_Label(voice_id_entry)
+        if voice_profile_label in per_voice_results:
+            print(f"Element_Match_Contribution_Type_Explorer: WARNING - voice_ids contains more than one entry resolving to profile '{voice_profile_label}'; only the first is kept")
             continue
 
+        member_states = []
+        for member_voice_id in voice_profile_members:
+            member_state = Load_Layered_State(Json_Directory + f"Speaker_{member_voice_id}_Frequency_Amount_Occurrence_Counts{Format_Half_Life_For_Filename(voice_profile_half_life)}.json")
+            if member_state is None:
+                print(f"Element_Match_Contribution_Type_Explorer: no data found for voice_id '{member_voice_id}'" + (f" (member of profile '{voice_profile_label}'), excluding it from that profile" if len(voice_profile_members) > 1 else ", skipping"))
+                continue
+            member_states.append(member_state)
+        if not member_states:
+            print(f"Element_Match_Contribution_Type_Explorer: no data found for any member of profile '{voice_profile_label}', skipping")
+            continue
+
+        # an agglomerated profile is one profile spanning several voices, so its occurrence counts are merged before being converted to ratios — the merged profile is then indistinguishable downstream from a single-voice one
+        merged_frequency_amount_occurrence_counts = _Merge_Frequency_Amount_Occurrence_Counts(member_states)
+        merged_total_voiced_frequency_timepoints_count = sum(state["total_voiced_frequency_timepoints_count"] for state in member_states)
+
         inverted_occurrence_ratios = Convert_Occurrence_Counts_To_Ratios(
-            state["frequency_amount_occurrence_counts"],
-            state["total_voiced_frequency_timepoints_count"],
+            merged_frequency_amount_occurrence_counts,
+            merged_total_voiced_frequency_timepoints_count,
             invert=True
         )
 
@@ -1477,23 +1618,28 @@ def Run_Element_Match_Contribution_Type_Exploration(
             sorted_keys_per_bucket = _Build_Sorted_Keys(inverted_occurrence_ratios)
             bucket_medians = _Extract_Medians(inverted_occurrence_ratios) if need_bucket_medians else None
 
-        voiced_frequency_bucket_centers = Get_Voiced_Frequency_Bucket_Centers(state)
+        voiced_frequency_bucket_centers = Get_Voiced_Frequency_Bucket_Centers({
+            "frequency_bucket_centers": member_states[0]["frequency_bucket_centers"],
+            "frequency_amount_occurrence_counts": merged_frequency_amount_occurrence_counts,
+        })
         voiced_frequency_limit_index = len(voiced_frequency_bucket_centers)
 
         all_results = _Process_Sequences_For_Voice(
-            voiced_frequency_bucket_centers, voiced_frequency_limit_index,
+            voice_profile_members, voiced_frequency_bucket_centers, voiced_frequency_limit_index,
             inverted_occurrence_ratios, sorted_keys_per_bucket, bell_curve_projections, bucket_medians
         )
 
         if need_per_voice_ylims:
-            per_voice_ylims[voice_id] = _Compute_Global_Ylims(
+            per_voice_ylims[voice_profile_label] = _Compute_Global_Ylims(
                 included_variants, all_results, voiced_frequency_bucket_centers,
                 weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound,
                 accumulative_deviation_hyperparameters, chart_y_minimums
             )
 
-        per_voice_results[voice_id] = all_results
-        per_voice_voiced_frequency_bucket_centers[voice_id] = voiced_frequency_bucket_centers
+        per_voice_results[voice_profile_label] = all_results
+        per_voice_voiced_frequency_bucket_centers[voice_profile_label] = voiced_frequency_bucket_centers
+        voice_profile_members_by_label[voice_profile_label] = voice_profile_members
+        voice_profile_colors[voice_profile_label] = _Voice_Profile_Color(voice_id_entry)
 
     if not per_voice_results:
         print("Element_Match_Contribution_Type_Explorer: no data found for any voice_id, aborting")
@@ -1510,11 +1656,11 @@ def Run_Element_Match_Contribution_Type_Exploration(
             if include_per_speaker_overall_chart or include_per_speaker_per_bucket_chart:
                 for sequence_index in range(len(comparative_voices_audio_set)):
                     if include_per_speaker_overall_chart:
-                        Generate_Per_Speaker_Overall_Chart(voice_id, sequence_index, included_variants, overall_ylims, all_results[sequence_index])
+                        Generate_Per_Speaker_Overall_Chart(voice_id, sequence_index, included_variants, overall_ylims, all_results[sequence_index], voice_profile_colors[voice_id])
                     if include_per_speaker_per_bucket_chart:
                         Generate_Per_Speaker_Per_Bucket_Chart(voice_id, sequence_index, included_variants, per_bucket_ylims, all_results[sequence_index], voiced_frequency_bucket_centers, weighted_binary_match_contribution_lower_bound, weighted_binary_match_contribution_upper_bound)
             if include_combined_overall_chart:
-                Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, all_results)
+                Generate_Combined_Overall_Chart(voice_id, included_variants, overall_ylims, all_results, voice_profile_members_by_label[voice_id])
 
     if include_all_speaker_overall_chart:
         # a shared y-axis scale across every included voice_id keeps all overlaid lines on the all-speaker chart visible and comparable, rather than reusing any single voice_id's own (potentially narrower) scale
@@ -1533,10 +1679,10 @@ def Run_Element_Match_Contribution_Type_Exploration(
         reference_all_results = per_voice_results[successful_voice_ids[0]]
         for sequence_index in range(len(comparative_voices_audio_set)):
             speaker_segments = reference_all_results[sequence_index]["speaker_segments"]
-            Generate_All_Speaker_Overall_Chart(successful_voice_ids, sequence_index, included_variants, all_speaker_overall_ylims, per_voice_results, speaker_segments, metric_inclusions)
+            Generate_All_Speaker_Overall_Chart(successful_voice_ids, sequence_index, included_variants, all_speaker_overall_ylims, per_voice_results, speaker_segments, metric_inclusions, voice_profile_colors)
 
     if include_continuous_voice_profile_convergence_chart:
         convergence_ylim = _Compute_Continuous_Voice_Profile_Convergence_Ylim(per_voice_results, len(comparative_voices_audio_set))
-        Generate_Continuous_Voice_Profile_Convergence_Chart(successful_voice_ids, comparative_voices_audio_set, per_voice_results, convergence_ylim)
+        Generate_Continuous_Voice_Profile_Convergence_Chart(successful_voice_ids, comparative_voices_audio_set, per_voice_results, convergence_ylim, voice_profile_colors)
 
     print(f"Element_Match_Contribution_Type_Explorer: exploration complete for voice_ids {successful_voice_ids}")
