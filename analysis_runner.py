@@ -45,14 +45,16 @@ Conversational_Layered_Subdistribution_Audio_Set = [
 ]
 
 
-#Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
-Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
+Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
+#Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
 #Conversational_Speaker_Audio_Set_File_Name = "FDML0_0o4_MEDR0_0o3_MGRL0_0o2_MDAC0_0o1_50o0.json"
+#Conversational_Speaker_Audio_Set_File_Name = "FCJF0_1o0_50o0.json"
 
-#Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0", "UNIVERSAL"]
+Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0"]
 #Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0", "UNIVERSAL"]
-Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0"]
+#Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0"]
 #Conversational_Tracked_Voice_List = ["FDML0", "MEDR0", "MGRL0", "MDAC0"]
+#Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0", "FDAW0", "MDAC0", "MDPK0"]
 
 New_Partial_Speaker_Audio_Set = {
     "FJSP0": ["SA1", "SA2", "SI804", "SI1434", "SI1763", "SX84", "SX174", "SX264"],
@@ -101,11 +103,12 @@ def Run_Subtractive_Subdstributions():
 def Run_Voice_Subdistribution_Deviation_Analysis():
     Run_Voice_Subdistribution_Deviation_Tracking("FECD0", Layered_Subdistribution_Audio_Set, 0.9875, 0.3)
 
+
 def Run_Element_Match_Contribution_Type_Analysis():
     Run_Element_Match_Contribution_Type_Exploration(Conversational_Tracked_Voice_List, Conversational_Speaker_Audio_Set_File_Name,
         aggregate_match_types={
             "weighted_binary_match_contribution": {
-                "include_variant": True,
+                "include_variant": False,
                 "hyperparameters": {
                     "positive_contribution_range": 0.4,
                     "positive_weight_power_curve": 0.5,
@@ -124,11 +127,11 @@ def Run_Element_Match_Contribution_Type_Analysis():
                 "hyperparameters": {
                     "deviation_power_curve": 1.0,
                     "inverse_deviation_minimum": -100.0,
-                    "chart_y_minimum": -10.0
+                    "chart_y_minimum": -80.0
                 }
             },
             "occurrence_percentile_half_distance": {
-                "include_variant": True,
+                "include_variant": False,
                 "hyperparameters": {
                     "half_distance_minimum": -10.0,
                     "chart_y_minimum": -10.0
@@ -151,7 +154,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "accumulative_deviation":{
                 "include_variant": True,
                 "hyperparameters": {
-                    "decay_half_life": 100.0,
+                    "decay_half_life": 1000.0,
                     "use_non_directional_element_deviations": False,
                     "use_average_element_deviations": True,
                     "deviation_type": "occurrence_percentile_deviation",
@@ -166,6 +169,13 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "use_bell_curve_percentile_projection": True,
             "occurrence_ratio_cumulation_half_life": 1.0,
             "voice_profile_cumulation_half_life": 1.0,
+            "dynamic_signal_rate_cumulation":{
+                "use_dynamic_signal_rate_half_life": True,
+                "signal_rate_half_life_upper_bound": 1.0,
+                "signal_rate_half_life_lower_bound": 0.1,
+                "gap_cumulation_decrease_duration": 0.7,
+                "voice_cumulation_increase_duration": 0.1
+            },
             "continuous_voice_profiling":{
                 "use_continuous_voice_profiling": True,
                 "continue_voice_profiles_across_conversations": True,
@@ -185,10 +195,11 @@ def Run_Element_Match_Contribution_Type_Analysis():
                 },
                 "local_density_version": {
                     "use_version": True,
-                    "scaling_duration_maximum_bound": 5.0,          # in seconds; converted to timepoints internally
+                    "use_initial_exact_value_tracking": False,
+                    "scaling_duration_maximum_bound": 10.0,          # in seconds; converted to timepoints internally
                     "starting_standard_deviations_multiplier": 0.6,  # < 1.0, since greater than 1.0 would go negative
-                    "duration_scaling_multiplier_initialization_base": 10.0,
-},
+                    "duration_scaling_multiplier_initialization_base": 10.0
+                },
                 "perfect_tracking_version":{
                     "use_version": False
                 }
@@ -200,6 +211,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "per_speaker_overall": False,
             "per_speaker_per_bucket": False,
             "continuous_voice_profile_convergence": True,
+            "deviation_density_distribution": True,
         },
         metric_inclusions={
             "match_ratio": True,
@@ -207,6 +219,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "match_differentiation": True
         }
     )
+
 
 def Run_Visualize_Occurrence_Ratio_Percentile_Shapes():
     #Visualize_Occurrence_Ratio_Percentile_Shapes(["FCJF0", "MEDR0"], proximity_density_distance=0.001)
@@ -221,7 +234,7 @@ def Generate_Conversation():
                                         )
 
 def Run_Match_Contribution_Run_Comparison():
-    Compare_Match_Contribution_Runs(["6000_continuous_rate_test_1", "6000_continuous_rate_test_2", "6000_continuous_rate_test_3", "6000_continuous_rate_test_4"])
+    Compare_Match_Contribution_Runs(["dynamic_rates_2", "dynamic_rates_3"])
 
 #Run_Analysis()
 #Run_Subdstributions()

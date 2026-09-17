@@ -18,6 +18,7 @@ from matplotlib.colors import to_rgb
 from Global_Helper_Functions import Convert_Half_Life_To_Cumulation_Weight, Weighted_Average
 from Simulated_Conversation_Generator import Conversation_Sequence_Json_Directory
 from Match_Contribution_Run_Comparer import Record_Run_Configuration
+from Occurrence_Ratio_Percentile_Shape_Visualizer import Compute_Proximity_Density
 
 
 _SQRT2 = math.sqrt(2.0)
@@ -82,6 +83,10 @@ _OVERALL_KEYS = {
     "deviation_scaled_percentile_proximity": "average_deviation_scaled_percentile_proximities",
     "deviation_scaled_percentile_deviation": "average_deviation_scaled_percentile_deviations",
 }
+
+# each variant's values live on a very different scale (e.g. occurrence_percentile_deviation spans [-1, 0] while inverse_deviation can reach -100), so the deviation density chart's neighbor-counting radius is a fraction of each subplot's own value span rather than one absolute distance. The span is taken between these percentiles rather than min/max so a handful of clamped extremes can't inflate the radius for everything else.
+_DEVIATION_DENSITY_PROXIMITY_DISTANCE_SPAN_RATIO = 0.005
+_DEVIATION_DENSITY_SPAN_PERCENTILES = (1.0, 99.0)
 
 _PER_BUCKET_KEYS = {
     "weighted_binary_match_contribution": "match_contribution_weights",
@@ -950,6 +955,70 @@ def Generate_Continuous_Voice_Profile_Convergence_Chart(voice_ids, comparative_v
     print(f"Element_Match_Contribution_Type_Explorer: continuous voice profile convergence chart saved to '{output_path}'")
 
 
+def _Collect_Deviation_Density_Values(included_variants, per_voice_results):
+    # {variant: {voice_profile_label: numpy array}} of each profile's overall per-timepoint value at every voiced timepoint of its own speaker(s), pooled across every sequence. NaN values (profile not yet ready, or the leading null stretch under include_non_voiced_timepoints) carry no information about the distribution's shape, so they're dropped.
+    deviation_density_values = {variant: {} for variant in included_variants}
+    for voice_profile_label, all_results in per_voice_results.items():
+        for variant in included_variants:
+            collected_values = []
+            for data in all_results.values():
+                overall_values = data[_OVERALL_KEYS[variant]]
+                for data_index in data["own_voiced_timepoint_indices"]:
+                    value = overall_values[data_index]
+                    if not math.isnan(value):
+                        collected_values.append(value)
+            deviation_density_values[variant][voice_profile_label] = numpy.array(collected_values, dtype=float)
+    return deviation_density_values
+
+
+def Generate_Deviation_Density_Distribution_Chart(voice_ids, included_variants, deviation_density_values, voice_profile_colors, chart_x_minimums):
+    figure, axes = pyplot.subplots(len(included_variants), 1, figsize=(20, 6 * len(included_variants)))
+    if len(included_variants) == 1:
+        axes = [axes]
+
+    for axis, variant in zip(axes, included_variants):
+        variant_values = deviation_density_values[variant]
+        pooled_values = numpy.concatenate([values for values in variant_values.values() if values.size]) if any(values.size for values in variant_values.values()) else numpy.array([])
+        if not pooled_values.size:
+            axis.set_title(f"{variant} | no voiced own-speaker timepoints with values")
+            continue
+
+        # one shared radius per subplot (not per voice profile), so every profile's line in the subplot is smoothed identically and their shapes stay directly comparable
+        span_low, span_high = numpy.percentile(pooled_values, _DEVIATION_DENSITY_SPAN_PERCENTILES)
+        value_span = span_high - span_low
+        if value_span <= 0.0:
+            value_span = pooled_values.max() - pooled_values.min()
+        proximity_density_distance = value_span * _DEVIATION_DENSITY_PROXIMITY_DISTANCE_SPAN_RATIO if value_span > 0.0 else 1e-9
+
+        max_density = 0.0
+        for voice_id in voice_ids:
+            values = variant_values.get(voice_id)
+            if values is None or not values.size:
+                continue
+            values_asc, normalized_counts = Compute_Proximity_Density(values, proximity_density_distance)
+            if normalized_counts.size:
+                max_density = max(max_density, float(normalized_counts.max()))
+            axis.plot(values_asc, normalized_counts, color=voice_profile_colors[voice_id], linewidth=0.75, label=f"{voice_id} (n={values.size})")
+
+        # the same chart_y_minimum floor the overall charts use for this variant's value axis, applied here to the (now horizontal) value axis
+        x_minimum = max(float(pooled_values.min()), chart_x_minimums.get(variant, float("-inf")))
+        x_maximum = float(pooled_values.max())
+        if x_maximum > x_minimum:
+            axis.set_xlim(x_minimum, x_maximum)
+        axis.set_ylim(0.0, max_density if max_density > 0.0 else 1.0)
+        axis.set_title(f"{variant} | own-speaker voiced timepoint value proximity density (distance={proximity_density_distance:.4g}, sum-normalized per voice profile)")
+        axis.set_xlabel("Overall per-timepoint value")
+        axis.set_ylabel("Normalized Proximity Count")
+        axis.legend(fontsize=7)
+
+    pyplot.tight_layout()
+    voice_ids_suffix = "_".join(voice_ids)
+    output_path = Analysis_Directory + Analysis_Run_Name + f"_deviation_density_distribution_{voice_ids_suffix}.png"
+    pyplot.savefig(output_path, dpi=Chart_Image_Resolution, bbox_inches="tight")
+    pyplot.close()
+    print(f"Element_Match_Contribution_Type_Explorer: deviation density distribution chart saved to '{output_path}'")
+
+
 # --- entry point ---
 
 def Load_Comparative_Voices_Audio_Set(conversation_json_file_name):
@@ -1110,7 +1179,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
     include_per_speaker_overall_chart = chart_type_inclusions.get("per_speaker_overall", False)
     include_per_speaker_per_bucket_chart = chart_type_inclusions.get("per_speaker_per_bucket", False)
     include_continuous_voice_profile_convergence_chart = chart_type_inclusions.get("continuous_voice_profile_convergence", False) and use_continuous_voice_profiling
-    if not (include_combined_overall_chart or include_all_speaker_overall_chart or include_per_speaker_overall_chart or include_per_speaker_per_bucket_chart or include_continuous_voice_profile_convergence_chart):
+    include_deviation_density_distribution_chart = chart_type_inclusions.get("deviation_density_distribution", False)
+    if not (include_combined_overall_chart or include_all_speaker_overall_chart or include_per_speaker_overall_chart or include_per_speaker_per_bucket_chart or include_continuous_voice_profile_convergence_chart or include_deviation_density_distribution_chart):
         print("Element_Match_Contribution_Type_Explorer: no chart types included, aborting")
         return
 
@@ -1247,6 +1317,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
             )
 
             speaker_segments = []
+            # data-array indices of this profile's own speaker(s)' voiced timepoints — the population the deviation density chart describes
+            own_voiced_timepoint_indices = []
             processed_timepoint_count = 0
 
             def _Append_Null_Timepoint_Outputs():
@@ -1310,6 +1382,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
                             if turn_first_voiced_index is None:
                                 turn_first_voiced_index = processed_timepoint_count + 1
                             turn_last_voiced_index = processed_timepoint_count + 1
+                            if include_deviation_density_distribution_chart and speaker_is_profile_member:
+                                own_voiced_timepoint_indices.append(processed_timepoint_count + 1)
 
                         if use_signal_rate_simulation:
                             if use_dynamic_signal_rate_half_life:
@@ -1571,6 +1645,8 @@ def Run_Element_Match_Contribution_Type_Exploration(
                 speaker_data["average_deviation_scaled_percentile_deviations"] = average_deviation_scaled_percentile_deviations
             if include_continuous_voice_profile_convergence_chart:
                 speaker_data["continuous_voice_profile_convergence"] = continuous_voice_profile_convergence_values
+            if include_deviation_density_distribution_chart:
+                speaker_data["own_voiced_timepoint_indices"] = own_voiced_timepoint_indices
             all_results[sequence_index] = speaker_data
 
         return all_results
@@ -1684,5 +1760,9 @@ def Run_Element_Match_Contribution_Type_Exploration(
     if include_continuous_voice_profile_convergence_chart:
         convergence_ylim = _Compute_Continuous_Voice_Profile_Convergence_Ylim(per_voice_results, len(comparative_voices_audio_set))
         Generate_Continuous_Voice_Profile_Convergence_Chart(successful_voice_ids, comparative_voices_audio_set, per_voice_results, convergence_ylim, voice_profile_colors)
+
+    if include_deviation_density_distribution_chart:
+        deviation_density_values = _Collect_Deviation_Density_Values(included_variants, per_voice_results)
+        Generate_Deviation_Density_Distribution_Chart(successful_voice_ids, included_variants, deviation_density_values, voice_profile_colors, chart_y_minimums)
 
     print(f"Element_Match_Contribution_Type_Explorer: exploration complete for voice_ids {successful_voice_ids}")

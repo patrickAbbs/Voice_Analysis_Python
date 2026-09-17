@@ -21,6 +21,19 @@ def _Reconstruct_Sorted_Frequency_Ratios(bucket_counts):
     return result
 
 
+def Compute_Proximity_Density(values, proximity_density_distance):
+    # For each datapoint, count how many OTHER datapoints fall within proximity_density_distance,
+    # then normalize so all counts sum to 1.0. Sorting first allows O(log n) neighbor counting via searchsorted.
+    # Returns (ascending values, normalized counts), index-aligned so they plot directly as x/y.
+    values_asc = numpy.sort(numpy.asarray(values, dtype=float))
+    lo_indices = numpy.searchsorted(values_asc, values_asc - proximity_density_distance, side="left")
+    hi_indices = numpy.searchsorted(values_asc, values_asc + proximity_density_distance, side="right")
+    counts = (hi_indices - lo_indices - 1).astype(float)  # -1 to exclude self
+    total = counts.sum()
+    normalized_counts = counts / total if total > 0.0 else counts
+    return values_asc, normalized_counts
+
+
 def _Freq_Colors(n):
     purple = numpy.array([0.502, 0.0, 0.502])
     orange = numpy.array([1.0, 0.647, 0.0])
@@ -68,19 +81,11 @@ def Visualize_Occurrence_Ratio_Percentile_Shapes(voice_ids, proximity_density_di
             else:
                 per_bucket_normalized.append([(v - bucket_min) / span for v in sorted_ratios])
 
-        # Compute proximity density for each bucket.
-        # For each datapoint, count how many OTHER datapoints fall within proximity_density_distance,
-        # then normalize so all counts for that bucket sum to 1.0.
-        # The sorted ascending array allows O(log n) neighbor counting via searchsorted.
+        # Compute proximity density for each bucket (normalized so all counts for that bucket sum to 1.0).
         per_bucket_proximity_density = []
         per_bucket_proximity_x = []
         for sorted_ratios in per_bucket_sorted_ratios:
-            ratios_asc = numpy.array(sorted(sorted_ratios))
-            lo_indices = numpy.searchsorted(ratios_asc, ratios_asc - proximity_density_distance, side="left")
-            hi_indices = numpy.searchsorted(ratios_asc, ratios_asc + proximity_density_distance, side="right")
-            counts = (hi_indices - lo_indices - 1).astype(float)  # -1 to exclude self
-            total = counts.sum()
-            normalized_counts = counts / total if total > 0.0 else counts
+            ratios_asc, normalized_counts = Compute_Proximity_Density(sorted_ratios, proximity_density_distance)
             per_bucket_proximity_density.append(normalized_counts)
             per_bucket_proximity_x.append(ratios_asc)
 
