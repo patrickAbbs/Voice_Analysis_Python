@@ -84,10 +84,6 @@ _OVERALL_KEYS = {
     "deviation_scaled_percentile_deviation": "average_deviation_scaled_percentile_deviations",
 }
 
-# each variant's values live on a very different scale (e.g. occurrence_percentile_deviation spans [-1, 0] while inverse_deviation can reach -100), so the deviation density chart's neighbor-counting radius is a fraction of each subplot's own value span rather than one absolute distance. The span is taken between these percentiles rather than min/max so a handful of clamped extremes can't inflate the radius for everything else.
-_DEVIATION_DENSITY_PROXIMITY_DISTANCE_SPAN_RATIO = 0.005
-_DEVIATION_DENSITY_SPAN_PERCENTILES = (1.0, 99.0)
-
 _PER_BUCKET_KEYS = {
     "weighted_binary_match_contribution": "match_contribution_weights",
     "occurrence_percentile_deviation": "occurrence_percentile_deviations",
@@ -971,7 +967,7 @@ def _Collect_Deviation_Density_Values(included_variants, per_voice_results):
     return deviation_density_values
 
 
-def Generate_Deviation_Density_Distribution_Chart(voice_ids, included_variants, deviation_density_values, voice_profile_colors, chart_x_minimums):
+def Generate_Deviation_Density_Distribution_Chart(voice_ids, included_variants, deviation_density_values, voice_profile_colors, chart_x_minimums, proximity_distance_span_ratio, span_percentiles):
     figure, axes = pyplot.subplots(len(included_variants), 1, figsize=(20, 6 * len(included_variants)))
     if len(included_variants) == 1:
         axes = [axes]
@@ -983,12 +979,12 @@ def Generate_Deviation_Density_Distribution_Chart(voice_ids, included_variants, 
             axis.set_title(f"{variant} | no voiced own-speaker timepoints with values")
             continue
 
-        # one shared radius per subplot (not per voice profile), so every profile's line in the subplot is smoothed identically and their shapes stay directly comparable
-        span_low, span_high = numpy.percentile(pooled_values, _DEVIATION_DENSITY_SPAN_PERCENTILES)
+        # each variant's values live on a very different scale (e.g. occurrence_percentile_deviation spans [-1, 0] while inverse_deviation can reach -100), so the neighbor-counting radius is a fraction of this subplot's own value span rather than one absolute distance. The span is taken between percentiles rather than min/max so a handful of clamped extremes can't inflate the radius for everything else. One shared radius per subplot (not per voice profile), so every profile's line is smoothed identically and their shapes stay directly comparable.
+        span_low, span_high = numpy.percentile(pooled_values, span_percentiles)
         value_span = span_high - span_low
         if value_span <= 0.0:
             value_span = pooled_values.max() - pooled_values.min()
-        proximity_density_distance = value_span * _DEVIATION_DENSITY_PROXIMITY_DISTANCE_SPAN_RATIO if value_span > 0.0 else 1e-9
+        proximity_density_distance = value_span * proximity_distance_span_ratio if value_span > 0.0 else 1e-9
 
         max_density = 0.0
         for voice_id in voice_ids:
@@ -1179,7 +1175,9 @@ def Run_Element_Match_Contribution_Type_Exploration(
     include_per_speaker_overall_chart = chart_type_inclusions.get("per_speaker_overall", False)
     include_per_speaker_per_bucket_chart = chart_type_inclusions.get("per_speaker_per_bucket", False)
     include_continuous_voice_profile_convergence_chart = chart_type_inclusions.get("continuous_voice_profile_convergence", False) and use_continuous_voice_profiling
-    include_deviation_density_distribution_chart = chart_type_inclusions.get("deviation_density_distribution", False)
+    # unlike the other chart types, this one carries its own hyperparameters, so its entry is a dict rather than a plain bool
+    deviation_density_distribution_hyperparameters = chart_type_inclusions.get("deviation_density_distribution", {})
+    include_deviation_density_distribution_chart = deviation_density_distribution_hyperparameters.get("include_chart", False)
     if not (include_combined_overall_chart or include_all_speaker_overall_chart or include_per_speaker_overall_chart or include_per_speaker_per_bucket_chart or include_continuous_voice_profile_convergence_chart or include_deviation_density_distribution_chart):
         print("Element_Match_Contribution_Type_Explorer: no chart types included, aborting")
         return
@@ -1763,6 +1761,10 @@ def Run_Element_Match_Contribution_Type_Exploration(
 
     if include_deviation_density_distribution_chart:
         deviation_density_values = _Collect_Deviation_Density_Values(included_variants, per_voice_results)
-        Generate_Deviation_Density_Distribution_Chart(successful_voice_ids, included_variants, deviation_density_values, voice_profile_colors, chart_y_minimums)
+        Generate_Deviation_Density_Distribution_Chart(
+            successful_voice_ids, included_variants, deviation_density_values, voice_profile_colors, chart_y_minimums,
+            deviation_density_distribution_hyperparameters["proximity_distance_span_ratio"],
+            deviation_density_distribution_hyperparameters["span_percentiles"]
+        )
 
     print(f"Element_Match_Contribution_Type_Explorer: exploration complete for voice_ids {successful_voice_ids}")

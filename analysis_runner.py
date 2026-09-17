@@ -211,7 +211,11 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "per_speaker_overall": False,
             "per_speaker_per_bucket": False,
             "continuous_voice_profile_convergence": True,
-            "deviation_density_distribution": True,
+            "deviation_density_distribution": {
+                "include_chart": True,
+                "proximity_distance_span_ratio": 0.01,   # neighbor-counting radius as a fraction of each subplot's value span
+                "span_percentiles": [1.0, 99.0]            # [low, high] percentiles bounding that value span
+            },
         },
         metric_inclusions={
             "match_ratio": True,
