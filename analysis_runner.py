@@ -45,15 +45,15 @@ Conversational_Layered_Subdistribution_Audio_Set = [
 ]
 
 
-Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
+#Conversational_Speaker_Audio_Set_File_Name = "FCJF0_0o4_MCPM0_0o3_FDML0_0o2_MGRL0_0o1_50o0.json"
 #Conversational_Speaker_Audio_Set_File_Name = "FDAW0_0o4_MDAC0_0o4_MDPK0_0o2_50o0.json"
-#Conversational_Speaker_Audio_Set_File_Name = "FDML0_0o4_MEDR0_0o3_MGRL0_0o2_MDAC0_0o1_50o0.json"
+Conversational_Speaker_Audio_Set_File_Name = "FDML0_0o4_MEDR0_0o3_MGRL0_0o2_MDAC0_0o1_50o0.json"
 #Conversational_Speaker_Audio_Set_File_Name = "FCJF0_1o0_50o0.json"
 
-Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0"]
+#Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0"]
 #Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0", "UNIVERSAL"]
 #Conversational_Tracked_Voice_List = ["FDAW0", "MDAC0", "MDPK0"]
-#Conversational_Tracked_Voice_List = ["FDML0", "MEDR0", "MGRL0", "MDAC0"]
+Conversational_Tracked_Voice_List = ["FDML0", "MEDR0", "MGRL0", "MDAC0"]
 #Conversational_Tracked_Voice_List = ["FCJF0", "MCPM0", "FDML0", "FDAW0", "MDAC0", "MDPK0"]
 
 New_Partial_Speaker_Audio_Set = {
@@ -157,7 +157,7 @@ def Run_Element_Match_Contribution_Type_Analysis():
                     "decay_half_life": 1000.0,
                     "use_non_directional_element_deviations": False,
                     "use_average_element_deviations": True,
-                    "deviation_type": "occurrence_percentile_deviation",
+                    "deviation_type": "deviation_scaled_percentile_deviation",
                     "use_self_tracking_reset": True,
                     "chart_y_minimum": float("-inf")
                 }
@@ -213,8 +213,8 @@ def Run_Element_Match_Contribution_Type_Analysis():
             "continuous_voice_profile_convergence": True,
             "deviation_density_distribution": {
                 "include_chart": True,
-                "proximity_distance_span_ratio": 0.01,   # neighbor-counting radius as a fraction of each subplot's value span
-                "span_percentiles": [1.0, 99.0]            # [low, high] percentiles bounding that value span
+                "proximity_distance_span_ratio": 0.015,   # neighbor-counting radius as a fraction of each subplot's value span
+                "span_percentiles": [0.02, 98.0]            # [low, high] percentiles bounding that value span
             },
         },
         metric_inclusions={

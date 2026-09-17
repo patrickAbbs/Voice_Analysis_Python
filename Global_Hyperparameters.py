@@ -44,7 +44,7 @@ Audio_File_Set = ["normal_1", "no_nose_1", "round_1"]
 #Audio_File_Set = ["round_1", "round_2", "round_3"]
 
 Analysis_Directory_Path = "tmp/media/layered_subdistributions/"
-Analysis_Directory_Folder = "deviation_density_distribution_chart_2"
+Analysis_Directory_Folder = "deviation_density_distribution_chart_accumulative_type_fixed"
 Analysis_Directory = Analysis_Directory_Path + Analysis_Directory_Folder + "/"
 Analysis_Run_Name = ""
 
